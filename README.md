@@ -13,8 +13,8 @@
  - PyTorch
 
 ### The Last Generation
- - CNN, RNN, etc
- - CNN or RNN projects
+ - CNNs & RNNs
+ - Computer Vision, Speech Recognition
  - Reinforcement Learning
  - AlphaGo
 
