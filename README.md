@@ -2,7 +2,7 @@
 
 ## Goal
  - Understand the fundamentals of AI
- - Master the usage and principles of AI-related tools
+ - Master the AI-related tools and frameworks
  - Know the current state of the art, and How it works
 
 ## Plan
