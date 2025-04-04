@@ -13,20 +13,21 @@
  - PyTorch
 
 ### Season 2: Network Structure
- - CNNs & RNNs & LSTMs
- - Computer Vision, Speech Recognition
+ - CNN(Convolutional Neural Network)
+ - RNN(Recurrent Neural Network) & LSTMs
+ - Computer Vision & Speech Recognition
  - Transformer
 
-### Season 3: Reinforcement Learning
+### Season 3: Content Generation
+ - GAN(Generative Adversarial Network)
+ - Diffusion Model
+ - Text to Image & Text to Video
+ - DiT(Diffusion Transformer)
+
+### Season 4: Reinforcement Learning
  - Reinforcement Learning
  - Chess AI & AlphaGo
- - Large Language Model
  - RLHF
 
-### Season 4: Content Generation
- - GAN Model
- - Diffusion Model
- - Text to Image
- - Text to Video
-
-### Season 5: To be continued...
+### Season 5: Large Language Model
+ - to be continued
