@@ -6,7 +6,7 @@ class Scalar:
         self.grad = 0
         # attributes for auto-grad
         self._backward = lambda: None
-        self._prev = set(_prev)
+        self._prev = _prev
         self._op = _op
 
     def __repr__(self):
