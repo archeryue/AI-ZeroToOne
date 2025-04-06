@@ -1,6 +1,6 @@
 # neural network module
 
-from autograd import Scalar
+from tinyflow.autograd import Scalar
 
 class Module:
     def param(self):
@@ -17,7 +17,10 @@ class Neuron(Module):
         self.act = act
 
     def __call__(self, x):
-        h = sum((wi * xi for wi, xi in zip(self.w, x)), self.b)
+        h = Scalar(0.0)
+        for wi, xi in zip(self.w, x):
+            h = wi * xi + h
+        h = h + self.b
         return h.relu() if self.act else h
 
     def param(self):
