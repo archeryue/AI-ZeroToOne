@@ -59,7 +59,7 @@ class Scalar:
             v._backward()
 
     def __neg__(self):
-        return self * -1
+        return self * Scalar(-1.0)
 
     def __radd__(self, other):
         return self + other

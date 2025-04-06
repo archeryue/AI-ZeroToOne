@@ -1,5 +1,6 @@
 # neural network module
 
+import random
 from tinyflow.autograd import Scalar
 
 class Module:
@@ -12,8 +13,8 @@ class Module:
 
 class Neuron(Module):
     def __init__(self, D_in, act=True):
-        self.w = [Scalar(0.0) for _ in range(D_in)]
-        self.b = Scalar(0.0)
+        self.w = [Scalar(random.random()) for _ in range(D_in)]
+        self.b = Scalar(random.random())
         self.act = act
 
     def __call__(self, x):
@@ -57,4 +58,4 @@ class MSELoss:
             delta = yp - yt
             square = delta ** 2
             loss = loss + square
-        return loss / len(y_pred)
+        return loss / Scalar(len(y_pred))
