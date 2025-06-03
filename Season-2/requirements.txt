@@ -1,2 +1,5 @@
+torch
+scikit-learn
 datasets
 matplotlib
+transformers
