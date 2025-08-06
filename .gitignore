@@ -4,3 +4,4 @@
 *.pth
 *data/
 *.data/
+*logs/
