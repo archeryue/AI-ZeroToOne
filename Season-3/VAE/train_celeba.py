@@ -44,32 +44,14 @@ def main():
     # Load data
     print("Loading CelebA dataset...")
     try:
-        train_loader = get_celeba_loader(
-            batch_size=args.batch_size, 
-            train=True, 
-            download=config.DOWNLOAD_DATA,
-            data_root=config.DATA_ROOT
-        )
-        test_loader = get_celeba_loader(
-            batch_size=args.batch_size, 
-            train=False, 
-            download=config.DOWNLOAD_DATA,
-            data_root=config.DATA_ROOT
-        )
+        train_loader, test_loader = get_celeba_loader(batch_size=args.batch_size)
         
         print(f"Training samples: {len(train_loader.dataset)}")
         print(f"Test samples: {len(test_loader.dataset)}")
         
     except Exception as e:
         print(f"Error loading CelebA dataset: {e}")
-        print("Using dummy dataset for demonstration...")
-        
-        # Create dummy loaders for demonstration
-        train_loader = get_celeba_loader(batch_size=args.batch_size, train=True, download=False)
-        test_loader = get_celeba_loader(batch_size=args.batch_size, train=False, download=False)
-        
-        print("Note: This is using randomly generated data for demonstration.")
-        print("For real training, please download the CelebA dataset manually.")
+        breakpoint()
     
     # Create model
     print(f"Creating VAE model with latent dimension: {args.latent_dim}")

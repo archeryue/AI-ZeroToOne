@@ -43,8 +43,7 @@ def main():
     
     # Load data
     print("Loading MNIST dataset...")
-    train_loader = get_mnist_loader(batch_size=args.batch_size, train=True, download=config.DOWNLOAD_DATA)
-    test_loader = get_mnist_loader(batch_size=args.batch_size, train=False, download=config.DOWNLOAD_DATA)
+    train_loader, test_loader = get_mnist_loader(batch_size=args.batch_size)
     
     print(f"Training samples: {len(train_loader.dataset)}")
     print(f"Test samples: {len(test_loader.dataset)}")

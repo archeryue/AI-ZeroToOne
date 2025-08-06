@@ -14,7 +14,6 @@ NUM_EPOCHS = 50
 BETA = 1.0  # Weight for KL divergence term
 
 # Data parameters
-DOWNLOAD_DATA = True
 NUM_WORKERS = 4
 
 # Logging and checkpointing
