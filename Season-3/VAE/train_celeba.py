@@ -10,7 +10,7 @@ from torch.utils.data import random_split
 
 # Import custom modules
 from models import VAECelebA
-from data import get_celeba_loader
+from dataloader import get_celeba_loader
 from utils import VAETrainer, save_samples, plot_reconstruction, plot_training_curves
 from configs import celeba_config as config
 

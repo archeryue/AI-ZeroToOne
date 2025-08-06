@@ -10,7 +10,7 @@ from torch.utils.data import random_split
 
 # Import custom modules
 from models import VAEMnist
-from data import get_mnist_loader
+from dataloader import get_mnist_loader
 from utils import VAETrainer, save_samples, plot_reconstruction, plot_training_curves
 from configs import mnist_config as config
 

@@ -5,6 +5,8 @@ from torchvision import datasets, transforms
 from torchvision.datasets import CelebA
 import urllib.request
 import zipfile
+from PIL import Image
+import numpy as np
 
 
 def get_mnist_loader(batch_size=128, train=True, download=True):
@@ -103,8 +105,9 @@ class DummyCelebA(torch.utils.data.Dataset):
         return self.size
     
     def __getitem__(self, idx):
-        # Generate random RGB image
-        img = torch.rand(3, 64, 64)
+        # Generate random RGB image as PIL Image (values 0-255)
+        img_array = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        img = Image.fromarray(img_array)
         if self.transform:
             img = self.transform(img)
         return img, 0  # Return dummy label

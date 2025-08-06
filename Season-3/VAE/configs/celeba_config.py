@@ -1,6 +1,7 @@
 """
 Configuration for CelebA VAE training
 """
+import torch
 
 # Model parameters
 LATENT_DIM = 128

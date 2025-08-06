@@ -1,6 +1,7 @@
 """
 Configuration for MNIST VAE training
 """
+import torch
 
 # Model parameters
 LATENT_DIM = 20
