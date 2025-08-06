@@ -16,11 +16,13 @@
  - CNN(Convolutional Neural Network)
  - RNN(Recurrent Neural Network) & LSTMs
  - Computer Vision & Speech Recognition
+ - Seq2Seq & Attention
  - Transformer
 
 ### Season 3: Content Generation
+ - VAE(Variational Auto-Encoder)
  - GAN(Generative Adversarial Network)
- - Diffusion Model
+ - Diffusion Models(VI & Score-based)
  - Text to Image & Text to Video
  - DiT(Diffusion Transformer)
 
