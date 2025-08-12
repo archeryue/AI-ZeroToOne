@@ -30,6 +30,7 @@
  - Reinforcement Learning
  - Chess AI & AlphaGo
  - RLHF & LLM
+ - Agent
 
 ### Season 5: AI Engineering
  - AI Engineering basics
