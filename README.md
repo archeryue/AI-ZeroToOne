@@ -29,7 +29,10 @@
 ### Season 4: Reinforcement Learning
  - Reinforcement Learning
  - Chess AI & AlphaGo
- - RLHF
+ - RLHF & LLM
 
-### Season 5: Large Language Model
- - to be continued
+### Season 5: AI Engineering
+ - AI Engineering basics
+ - Large-scale Training & Efficient Training
+ - Inference Optimization
+ - Model Lightweighting
