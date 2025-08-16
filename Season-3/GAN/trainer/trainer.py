@@ -283,7 +283,8 @@ class WGANGPTrainer:
         print(f"Starting training on {self.device}")
         print(f"Total epochs: {self.config.num_epochs}")
         print(f"Batch size: {self.config.batch_size}")
-        print(f"Learning rate: {self.config.learning_rate}")
+        print(f"Learning rate D: {self.config.learning_rate_d}")
+        print(f"Learning rate G: {self.config.learning_rate_g}")
         
         # Generate initial samples
         self.generate_samples()
