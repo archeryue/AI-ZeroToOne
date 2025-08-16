@@ -56,10 +56,17 @@ def parse_args():
     )
     
     parser.add_argument(
-        '--learning-rate', 
+        '--learning-rate-d', 
         type=float, 
         default=None,
-        help='Learning rate (overrides config)'
+        help='Learning rate for D (overrides config)'
+    )
+    
+    parser.add_argument(
+        '--learning-rate-g', 
+        type=float, 
+        default=None,
+        help='Learning rate for G (overrides config)'
     )
     
     parser.add_argument(
@@ -93,8 +100,10 @@ def main():
         config.num_epochs = args.epochs
     if args.batch_size is not None:
         config.batch_size = args.batch_size
-    if args.learning_rate is not None:
-        config.learning_rate = args.learning_rate
+    if args.learning_rate_d is not None:
+        config.learning_rate_d = args.learning_rate_d
+    if args.learning_rate_g is not None:
+        config.learning_rate_g = args.learning_rate_g
     if args.device is not None:
         config.device = args.device
     if args.checkpoint_dir is not None:
@@ -107,7 +116,8 @@ def main():
     print(f"Device: {config.device}")
     print(f"Image size: {config.image_size}")
     print(f"Batch size: {config.batch_size}")
-    print(f"Learning rate: {config.learning_rate}")
+    print(f"Learning rate D: {config.learning_rate_d}")
+    print(f"Learning rate G: {config.learning_rate_g}")
     print(f"Number of epochs: {config.num_epochs}")
     print(f"Latent dimension: {config.latent_dim}")
     print(f"Critic iterations: {config.critic_iterations}")

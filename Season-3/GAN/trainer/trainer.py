@@ -33,12 +33,12 @@ class WGANGPTrainer:
         # Initialize optimizers
         self.optimizer_G = optim.Adam(
             self.generator.parameters(),
-            lr=config.learning_rate,
+            lr=config.learning_rate_g,
             betas=(config.beta1, config.beta2)
         )
         self.optimizer_D = optim.Adam(
             self.discriminator.parameters(),
-            lr=config.learning_rate,
+            lr=config.learning_rate_d,
             betas=(config.beta1, config.beta2)
         )
         

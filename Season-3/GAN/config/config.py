@@ -19,12 +19,13 @@ class ModelConfig:
     # Training parameters
     batch_size: int = 64
     num_epochs: int = 100
-    learning_rate: float = 0.0002
+    learning_rate_d: float = 0.00005
+    learning_rate_g: float = 0.0002
     beta1: float = 0.5
     beta2: float = 0.999
     
     # WGAN-GP specific
-    critic_iterations: int = 5
+    critic_iterations: int = 4
     gradient_penalty_lambda: float = 10.0
     
     # Paths
@@ -36,7 +37,7 @@ class ModelConfig:
     # Logging and saving
     save_interval: int = 10
     log_interval: int = 100
-    sample_interval: int = 500
+    sample_interval: int = 1000
     num_samples: int = 64
     
     # Device
