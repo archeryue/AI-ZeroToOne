@@ -137,6 +137,7 @@ class WGANGPTrainer:
                 self.writer.add_scalar('Loss/Discriminator', D_loss.item(), self.global_step)
                 self.writer.add_scalar('Scores/D_real', D_real, self.global_step)
                 self.writer.add_scalar('Scores/D_fake', D_fake, self.global_step)
+                self.writer.add_scalar('Scores/D_margin', D_real - D_fake, self.global_step)
                 self.writer.add_scalar('Loss/Gradient_Penalty', gp.item(), self.global_step)
             
             # Generate samples
@@ -148,7 +149,8 @@ class WGANGPTrainer:
                 'G_loss': f'{G_loss.item():.4f}',
                 'D_loss': f'{D_loss.item():.4f}',
                 'D_real': f'{D_real:.4f}',
-                'D_fake': f'{D_fake:.4f}'
+                'D_fake': f'{D_fake:.4f}',
+                'D_margin': f'{D_real - D_fake:.4f}'
             })
             
             self.global_step += 1
