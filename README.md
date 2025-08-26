@@ -21,10 +21,11 @@
 
 ### Season 3: Content Generation
  - VAE(Variational Auto-Encoder)
- - GAN(Generative Adversarial Network)
+ - GAN(Generative Adversarial Nets)
  - Diffusion Models(VI & Score-based)
- - Text to Image & Text to Video
+ - Flow Matching & Diffusion(ODE & SDE)
  - DiT(Diffusion Transformer)
+ - Video Generation
 
 ### Season 4: Reinforcement Learning
  - Reinforcement Learning
