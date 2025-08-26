@@ -15,7 +15,7 @@
 ### Season 2: Network Structure [Videos](https://space.bilibili.com/20942052/lists/5164326)
  - CNN(Convolutional Neural Network)
  - RNN(Recurrent Neural Network) & LSTMs
- - Computer Vision & Speech Recognition
+ - Computer Vision & Machine Translation
  - Seq2Seq & Attention
  - Transformer
 
