@@ -6,20 +6,20 @@
  - Know the current state of the art, and How it works
 
 ## Plan
-### Season 1: Learning Basics
+### Season 1: Learning Basics [Videos](https://space.bilibili.com/20942052/lists/4258679)
  - Machine Learning Basics
  - Deep Learning Basics
  - GPU & CUDA
  - PyTorch
 
-### Season 2: Network Structure
+### Season 2: Network Structure [Videos](https://space.bilibili.com/20942052/lists/5164326)
  - CNN(Convolutional Neural Network)
  - RNN(Recurrent Neural Network) & LSTMs
  - Computer Vision & Speech Recognition
  - Seq2Seq & Attention
  - Transformer
 
-### Season 3: Content Generation
+### Season 3: Content Generation [Videos](https://space.bilibili.com/20942052/lists/5853725)
  - VAE(Variational Auto-Encoder)
  - GAN(Generative Adversarial Nets)
  - Diffusion Models(VI & Score-based)
