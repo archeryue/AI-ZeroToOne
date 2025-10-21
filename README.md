@@ -24,6 +24,7 @@
  - GAN(Generative Adversarial Nets)
  - Diffusion Models(VI & Score-based)
  - Flow Matching & Diffusion(ODE & SDE)
+ - Conditional Generation (Text-To-Image)
  - DiT(Diffusion Transformer)
  - Video Generation
 
