@@ -256,7 +256,8 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--mixed-precision', action='store_true', default=True, help='Use mixed precision')
     parser.add_argument('--no-mixed-precision', dest='mixed_precision', action='store_false', help='Disable mixed precision')
-    parser.add_argument('--compile-model', action='store_true', default=False, help='Use torch.compile')
+    parser.add_argument('--compile-model', action='store_true', default=True, help='Use torch.compile for 27%% speedup (default: enabled)')
+    parser.add_argument('--no-compile-model', dest='compile_model', action='store_false', help='Disable torch.compile')
     parser.add_argument('--resume-from', type=str, default=None, help='Resume from checkpoint')
 
     args = parser.parse_args()

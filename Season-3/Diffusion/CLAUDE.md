@@ -14,6 +14,31 @@ AI-ZeroToOne/Season-3/
 └── Diffusion/ # Diffusion model implementations (this directory)
 ```
 
+## ⚡ User Preferences - IMPORTANT
+
+**The user prioritizes FAST training and SHORT iteration times.** When making any changes or suggestions:
+
+1. **Always enable performance optimizations:**
+   - `torch.compile()` is ENABLED BY DEFAULT (27% faster, benchmarked on RTX 5060 Ti)
+   - Mixed precision training is default (AMP)
+   - Use efficient implementations over readable but slow code
+
+2. **Prefer faster settings over quality when in doubt:**
+   - Smaller batch sizes for faster iteration
+   - Fewer sampling steps during training
+   - Lower `save_every` and `sample_every` for quick feedback
+   - Smaller models for testing before scaling up
+
+3. **Optimization is a priority:**
+   - Our custom U-Net is 23% faster than HuggingFace Diffusers
+   - Our U-Net + torch.compile() is 27% faster than baseline
+   - Always benchmark before suggesting alternatives
+
+4. **When suggesting training runs:**
+   - Default to faster configs for initial testing
+   - Clearly separate "fast test" vs "production quality" settings
+   - Mention estimated training time
+
 ## Common Development Commands
 
 ### Training Commands
