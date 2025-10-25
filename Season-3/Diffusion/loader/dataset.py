@@ -36,33 +36,48 @@ class CelebADataset(Dataset):
             cache_dir = os.path.join(data_dir, 'cache')
         os.makedirs(cache_dir, exist_ok=True)
 
-        # Load dataset from HuggingFace with fallback options
+        # Load dataset from HuggingFace with multiple fallback options
         print(f"Loading CelebA dataset ({split} split)...")
-        try:
-            self.dataset = load_dataset(
-                'nielsr/CelebA-faces',
-                split=split,
-                cache_dir=cache_dir,
-                trust_remote_code=True
-            )
-            print(f"Successfully loaded {len(self.dataset)} images from nielsr/CelebA-faces")
-        except Exception as e:
-            print(f"Failed to load from nielsr/CelebA-faces: {e}")
-            print("Trying alternative source...")
+
+        # List of sources to try in order
+        # Note: trust_remote_code is deprecated, removed from all sources
+        sources = [
+            ('nielsr/CelebA-faces', {}),
+            ('huggan/CelebA-faces', {}),
+            ('mattymchen/celeba-hq', {}),
+        ]
+
+        dataset_loaded = False
+        for source, kwargs in sources:
             try:
-                # Alternative source
+                print(f"Trying to load from {source}...")
                 self.dataset = load_dataset(
-                    'huggan/CelebA-faces',
-                    split=split,
-                    cache_dir=cache_dir
+                    source,
+                    split=split if split != 'validation' else 'test',  # Some datasets use 'test' instead
+                    cache_dir=cache_dir,
+                    **kwargs
                 )
-                print(f"Successfully loaded {len(self.dataset)} images from huggan/CelebA-faces")
-            except Exception as e2:
-                print(f"Failed to load from huggan/CelebA-faces: {e2}")
-                raise RuntimeError(
-                    "Could not load CelebA dataset from any source. "
-                    "Please check your internet connection and HuggingFace access."
-                )
+                print(f"✓ Successfully loaded {len(self.dataset)} images from {source}")
+                dataset_loaded = True
+                break
+            except Exception as e:
+                print(f"✗ Failed to load from {source}: {str(e)[:100]}")
+                continue
+
+        if not dataset_loaded:
+            error_msg = (
+                "\n❌ Could not load CelebA dataset from any HuggingFace source.\n\n"
+                "Solutions:\n"
+                "1. Check internet connection\n"
+                "2. Try downloading manually:\n"
+                "   - Visit: https://www.kaggle.com/datasets/jessicali9530/celeba-dataset\n"
+                "   - Or: https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html\n"
+                "3. Set up HuggingFace authentication:\n"
+                "   - Login: huggingface-cli login\n"
+                "   - Token: https://huggingface.co/settings/tokens\n"
+                "4. Use local dataset (see documentation)\n"
+            )
+            raise RuntimeError(error_msg)
 
         # Define transforms: normalize to [-1, 1] for flow matching
         self.transform = transforms.Compose([
