@@ -1,0 +1,29 @@
+# Core deep learning frameworks
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Data loading
+datasets>=2.14.0
+huggingface-hub>=0.16.0
+
+# Image processing
+Pillow>=9.0.0
+
+# Visualization and logging
+matplotlib>=3.5.0
+tensorboard>=2.13.0
+
+# Progress bars
+tqdm>=4.64.0
+
+# Numerical computing
+numpy>=1.21.0
+
+# Optional: For adaptive ODE solving (better sampling quality)
+torchdiffeq>=0.2.3
+
+# Optional: For distributed training optimization
+accelerate>=0.20.0
+
+# Optional: For mixed precision training (usually included with PyTorch)
+# nvidia-apex  # Uncomment if you want NVIDIA Apex for advanced mixed precision

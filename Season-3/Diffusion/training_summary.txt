@@ -1,0 +1,11 @@
+Training Summary
+==================================================
+
+Total training steps: 69
+Loss - Min: 0.6673
+Loss - Max: 1.6204
+Loss - Average: 1.1327
+Loss - Final: 0.7656
+
+Learning Rate - Initial: 0.000000
+Learning Rate - Final: 0.000014
