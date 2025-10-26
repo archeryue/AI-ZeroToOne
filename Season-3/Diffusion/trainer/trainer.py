@@ -4,7 +4,7 @@ Trainer for Flow Matching model with multi-GPU support.
 import os
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
 from typing import Optional
@@ -76,7 +76,7 @@ class FlowMatchingTrainer:
 
         # Mixed precision training
         self.use_amp = training_config.mixed_precision
-        self.scaler = GradScaler() if self.use_amp else None
+        self.scaler = GradScaler('cuda') if self.use_amp else None
 
         # EMA model for better sample quality
         self.use_ema = model_config.use_ema
