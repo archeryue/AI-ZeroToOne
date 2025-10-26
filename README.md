@@ -14,9 +14,11 @@
 
 ### Season 2: Network Structure [Videos](https://space.bilibili.com/20942052/lists/5164326)
  - CNN(Convolutional Neural Network)
- - RNN(Recurrent Neural Network) & LSTMs
+ - RNN(Recurrent Neural Network)
+ - LSTM & GRU (Long Short Memories)
  - Computer Vision & Machine Translation
- - Seq2Seq & Attention
+ - Seq2Seq & Attention Mechanism
+ - ResNet (Shortcut Connections)
  - Transformer
 
 ### Season 3: Content Generation [Videos](https://space.bilibili.com/20942052/lists/5853725)
