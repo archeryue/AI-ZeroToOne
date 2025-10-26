@@ -123,7 +123,7 @@ class FlowMatchingTrainer:
         self.optimizer.zero_grad()
 
         # Forward pass with mixed precision
-        with autocast(enabled=self.use_amp):
+        with autocast(device_type='cuda', enabled=self.use_amp):
             loss, info = self.flow_model(batch)
 
         # Backward pass
