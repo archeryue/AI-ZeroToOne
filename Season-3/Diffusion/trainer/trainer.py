@@ -387,7 +387,12 @@ class FlowMatchingTrainer:
         if self.use_ema and 'ema_state_dict' in checkpoint:
             self.ema.ema_model.load_state_dict(checkpoint['ema_state_dict'])
 
+        # DO NOT load old scaler state - it may have grown too large
+        # Instead, keep our conservative scaler settings and just reset the scale
         if self.use_amp and 'scaler_state_dict' in checkpoint:
-            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            old_scale = checkpoint['scaler_state_dict'].get('scale', 'unknown')
+            print(f"⚠️  Ignoring old GradScaler state (scale={old_scale})")
+            print(f"   Using fresh conservative scaler (init_scale=2^10)")
+            # Don't load: self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
 
         print(f"Resumed from step {self.global_step}, epoch {self.epoch}")
