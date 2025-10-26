@@ -22,6 +22,9 @@ def timestep_embedding(timesteps: torch.Tensor, dim: int, max_period: int = 1000
         Embedding tensor of shape (N, dim)
     """
     half = dim // 2
+    # Clamp timesteps to prevent extreme values
+    timesteps = torch.clamp(timesteps, -1e3, 1e3)
+
     freqs = torch.exp(
         -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
     ).to(device=timesteps.device)
@@ -103,7 +106,7 @@ class ResBlock(nn.Module):
 
 
 class AttentionBlock(nn.Module):
-    """Self-attention block."""
+    """Self-attention block with numerically stable attention."""
 
     def __init__(self, channels: int, num_heads: int = 4):
         super().__init__()
@@ -140,12 +143,11 @@ class AttentionBlock(nn.Module):
         qkv = qkv.permute(1, 0, 2, 4, 3)  # (3, B, num_heads, H*W, head_dim)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        # Attention
-        scale = 1.0 / math.sqrt(self.head_dim)
-        attn = torch.einsum('bhid,bhjd->bhij', q, k) * scale
-        attn = F.softmax(attn, dim=-1)
+        # Use PyTorch's scaled_dot_product_attention for numerical stability
+        # This is optimized and handles mixed precision properly
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0)
 
-        out = torch.einsum('bhij,bhjd->bhid', attn, v)
+        # Reshape back
         out = out.permute(0, 1, 3, 2).reshape(B, C, H, W)
 
         out = self.proj_out(out)

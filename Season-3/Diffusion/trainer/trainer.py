@@ -74,9 +74,19 @@ class FlowMatchingTrainer:
         # Learning rate scheduler with warmup
         self.scheduler = self._create_scheduler()
 
-        # Mixed precision training
+        # Mixed precision training with conservative GradScaler settings
         self.use_amp = training_config.mixed_precision
-        self.scaler = GradScaler('cuda') if self.use_amp else None
+        if self.use_amp:
+            # More conservative scaler settings to prevent NaN propagation
+            self.scaler = GradScaler(
+                'cuda',
+                init_scale=2.**10,  # Start with lower scale (default is 2^16)
+                growth_factor=1.5,  # Slower growth (default is 2.0)
+                backoff_factor=0.5,  # Same backoff
+                growth_interval=1000  # Less frequent growth (default is 2000)
+            )
+        else:
+            self.scaler = None
 
         # EMA model for better sample quality
         self.use_ema = model_config.use_ema
@@ -126,23 +136,56 @@ class FlowMatchingTrainer:
         with autocast(device_type='cuda', enabled=self.use_amp):
             loss, info = self.flow_model(batch)
 
+        # Check for NaN loss
+        if torch.isnan(loss) or torch.isinf(loss):
+            print(f"\n⚠️  WARNING: NaN or Inf loss detected at step {self.global_step}!")
+            print("Skipping this batch to prevent gradient corruption...")
+            info['loss'] = float('nan')
+            info['skipped'] = True
+            return info
+
         # Backward pass
         if self.use_amp:
             self.scaler.scale(loss).backward()
             # Gradient clipping
             self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(
+
+            # Check for NaN gradients before clipping
+            grad_norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(),
                 self.training_config.grad_clip
             )
+
+            # Detect gradient explosion
+            if torch.isnan(grad_norm) or torch.isinf(grad_norm):
+                print(f"\n⚠️  WARNING: NaN or Inf gradients at step {self.global_step}!")
+                print("Skipping optimizer step...")
+                self.optimizer.zero_grad()
+                info['loss'] = float('nan')
+                info['grad_norm'] = float('nan')
+                info['skipped'] = True
+                return info
+
+            info['grad_norm'] = grad_norm.item()
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(
+            grad_norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(),
                 self.training_config.grad_clip
             )
+
+            if torch.isnan(grad_norm) or torch.isinf(grad_norm):
+                print(f"\n⚠️  WARNING: NaN or Inf gradients at step {self.global_step}!")
+                print("Skipping optimizer step...")
+                self.optimizer.zero_grad()
+                info['loss'] = float('nan')
+                info['grad_norm'] = float('nan')
+                info['skipped'] = True
+                return info
+
+            info['grad_norm'] = grad_norm.item()
             self.optimizer.step()
 
         self.scheduler.step()
@@ -151,6 +194,7 @@ class FlowMatchingTrainer:
         if self.use_ema:
             self.ema.update()
 
+        info['skipped'] = False
         return info
 
     @torch.no_grad()
@@ -241,14 +285,21 @@ class FlowMatchingTrainer:
 
             # Logging
             if self.is_main_process and self.global_step % self.training_config.log_every == 0:
-                self.writer.add_scalar('train/loss', info['loss'], self.global_step)
-                self.writer.add_scalar('train/lr', self.optimizer.param_groups[0]['lr'], self.global_step)
+                # Only log non-NaN losses
+                if not info.get('skipped', False):
+                    self.writer.add_scalar('train/loss', info['loss'], self.global_step)
+                    self.writer.add_scalar('train/lr', self.optimizer.param_groups[0]['lr'], self.global_step)
+                    if 'grad_norm' in info:
+                        self.writer.add_scalar('train/grad_norm', info['grad_norm'], self.global_step)
 
-                if isinstance(pbar, tqdm):
-                    pbar.set_postfix({
-                        'loss': f"{info['loss']:.4f}",
-                        'lr': f"{self.optimizer.param_groups[0]['lr']:.6f}"
-                    })
+                    if isinstance(pbar, tqdm):
+                        postfix = {
+                            'loss': f"{info['loss']:.4f}",
+                            'lr': f"{self.optimizer.param_groups[0]['lr']:.6f}"
+                        }
+                        if 'grad_norm' in info:
+                            postfix['grad'] = f"{info['grad_norm']:.3f}"
+                        pbar.set_postfix(postfix)
 
             # Sampling
             if self.is_main_process and self.global_step % self.training_config.sample_every == 0:
