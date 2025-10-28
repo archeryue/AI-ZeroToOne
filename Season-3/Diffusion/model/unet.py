@@ -208,8 +208,9 @@ class UNet(nn.Module):
         self.image_channels = image_channels
         self.model_channels = model_channels
 
-        # Time embedding
+        # Time embedding : 512d
         time_emb_dim = model_channels * 4
+        # (B, 512)
         self.time_embed = nn.Sequential(
             nn.Linear(model_channels, time_emb_dim),
             nn.SiLU(),
@@ -217,6 +218,7 @@ class UNet(nn.Module):
         )
 
         # Input convolution
+        # (B, 3, 64, 64) -> (B, 128, 64, 64)
         self.input_conv = nn.Conv2d(image_channels, model_channels, 3, padding=1)
 
         # Downsampling path
@@ -225,12 +227,19 @@ class UNet(nn.Module):
         input_channels = [ch]
         current_resolution = 64  # Assuming input size is 64x64
 
+        # Channel multipliers: 1, 2, 2, 4
+        # Channel counts: 128, 256, 256, 512
+        # Resolutions:     64,  32,  16,   8
         for level, mult in enumerate(channel_mult):
             out_ch = model_channels * mult
 
+            # Residual blocks: 2
+            # 2 ResBlocks per level + Downsampling block (except last)
             for _ in range(num_res_blocks):
                 layers = [ResBlock(ch, out_ch, time_emb_dim, dropout)]
 
+                # Attention resolution 16, 8, the last two levels
+                # Self-attention for ResBlocks
                 if current_resolution in attention_resolutions:
                     layers.append(AttentionBlock(out_ch, num_heads))
 
@@ -244,7 +253,7 @@ class UNet(nn.Module):
                 input_channels.append(ch)
                 current_resolution //= 2
 
-        # Middle blocks
+        # Middle blocks for last level
         self.middle_blocks = nn.ModuleList([
             ResBlock(ch, ch, time_emb_dim, dropout),
             AttentionBlock(ch, num_heads),
@@ -257,9 +266,11 @@ class UNet(nn.Module):
         for level, mult in reversed(list(enumerate(channel_mult))):
             out_ch = model_channels * mult
 
+            # Residual blocks: 2 + 1 (to match downsampling block)
             for i in range(num_res_blocks + 1):
                 # Skip connection from downsampling path
                 skip_ch = input_channels.pop()
+                # add skip connection as channels
                 layers = [ResBlock(ch + skip_ch, out_ch, time_emb_dim, dropout)]
 
                 if current_resolution in attention_resolutions:
@@ -333,6 +344,7 @@ class UNet(nn.Module):
                 # This is a ResBlock group (possibly with attention)
                 for module in modules:
                     if isinstance(module, ResBlock):
+                        # pop skip connection, and cancat it as the input channels
                         skip = skip_connections.pop()
                         h = torch.cat([h, skip], dim=1)
                         h = module(h, t_emb)
