@@ -160,6 +160,12 @@ def main(args):
         dropout=model_config.dropout
     )
 
+    # Compile model (PyTorch 2.0+)
+    if training_config.compile_model:
+        if is_main_process:
+            print("Compiling model with torch.compile...")
+        unet = torch.compile(unet)
+
     flow_model = FlowMatching(
         model=unet,
         sigma_min=model_config.sigma_min
@@ -171,12 +177,6 @@ def main(args):
         trainable_params = sum(p.numel() for p in unet.parameters() if p.requires_grad)
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
-
-    # Compile model (PyTorch 2.0+)
-    if training_config.compile_model:
-        if is_main_process:
-            print("Compiling model with torch.compile...")
-        unet = torch.compile(unet)
 
     # Create trainer
     trainer = FlowMatchingTrainer(
