@@ -30,7 +30,7 @@
  - DiT(Diffusion Transformer)
  - Video Generation
 
-### Season 5: Language Models
+### Season 4: Language Models [Videos](https://space.bilibili.com/20942052/lists?sid=6900780)
  - Review: RNN -> Seq2Seq -> Transformer
  - From Word2vec to BERT
  - GPT Series
