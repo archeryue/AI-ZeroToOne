@@ -30,13 +30,20 @@
  - DiT(Diffusion Transformer)
  - Video Generation
 
-### Season 4: Reinforcement Learning
+### Season 5: Language Models
+ - Review: RNN -> Seq2Seq -> Transformer
+ - From Word2vec to BERT
+ - GPT Series
+ - BERT -> T5
+ - From CLIP to Flamingo
+
+### Season 5: Reinforcement Learning
  - Reinforcement Learning
  - Chess AI & AlphaGo
  - RLHF & LLM
  - Agent
 
-### Season 5: AI Engineering
+### Season 6: AI Engineering
  - AI Engineering basics
  - Large-scale Training & Efficient Training
  - Inference Optimization
