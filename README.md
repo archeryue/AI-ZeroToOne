@@ -38,8 +38,10 @@
  - From CLIP to Flamingo
 
 ### Season 5: Reinforcement Learning
- - Reinforcement Learning
- - Chess AI & AlphaGo
+ - RL Basics (Agent, Value, Policy, MDP)
+ - Traditional RL (DP, Model-free Prediction, Model-free Control)
+ - Deep RL (Value-based RL, Policy Gradient Methods, Actor-critic Methods)
+ - AlphaGo & AlphaZero
  - RLHF & LLM
  - Agent
 
