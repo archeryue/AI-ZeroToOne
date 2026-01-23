@@ -39,7 +39,7 @@
 
 ### Season 5: Reinforcement Learning
  - RL Basics (Agent, Value Function, Policy)
- - Markov Decision Process (MP, MRP, MDP, DP)
+ - Markov Decision Process (MP, MRP, MDP, & DP)
  - Traditional RL (Model-free Prediction, Model-free Control)
  - Deep RL (Value-based RL, Policy Gradient Methods, Actor-critic Methods)
  - AlphaGo & AlphaZero
