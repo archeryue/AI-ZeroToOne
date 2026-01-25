@@ -37,7 +37,7 @@
  - BERT -> T5
  - From CLIP to Flamingo
 
-### Season 5: Reinforcement Learning
+### Season 5: Reinforcement Learning [Videos](https://space.bilibili.com/20942052/lists/7264066)
  - RL Basics (Agent, Value Function, Policy)
  - Markov Decision Process (MP, MRP, MDP, & DP)
  - Traditional RL (Model-free Prediction, Model-free Control)
