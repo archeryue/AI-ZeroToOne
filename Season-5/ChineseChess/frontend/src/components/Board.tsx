@@ -274,6 +274,35 @@ export default function Board({ gameState, selectedPos, onCellClick }: BoardProp
           );
         })
       )}
+
+      {/* "杀" overlay on checkmate */}
+      {gameState.status !== "playing" && gameState.status !== "draw" && (
+        <>
+          <rect
+            x={0}
+            y={0}
+            width={BOARD_WIDTH}
+            height={BOARD_HEIGHT}
+            fill="rgba(0,0,0,0.35)"
+            rx={8}
+          />
+          <text
+            x={BOARD_WIDTH / 2}
+            y={BOARD_HEIGHT / 2}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fill="#C62828"
+            fontSize="160"
+            fontWeight="bold"
+            fontFamily="KaiTi, STKaiti, serif"
+            stroke="#FFD54F"
+            strokeWidth={3}
+            style={{ userSelect: "none" }}
+          >
+            杀
+          </text>
+        </>
+      )}
     </svg>
   );
 }

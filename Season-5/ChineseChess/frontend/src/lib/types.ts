@@ -19,7 +19,7 @@ export interface MoveRecord {
 }
 
 export interface WSMessage {
-  type: "game_state" | "ai_move" | "error";
+  type: "game_state" | "ai_move" | "ai_thinking" | "error";
   data: GameState | AIMoveData | ErrorData;
 }
 

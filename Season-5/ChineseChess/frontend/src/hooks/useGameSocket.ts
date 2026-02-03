@@ -7,6 +7,7 @@ import { GameState, WSMessage } from "@/lib/types";
 export function useGameSocket(gameId: string | null) {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [connected, setConnected] = useState(false);
+  const [aiThinking, setAiThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -25,6 +26,9 @@ export function useGameSocket(gameId: string | null) {
       const msg: WSMessage = JSON.parse(event.data);
       if (msg.type === "game_state") {
         setGameState(msg.data as GameState);
+        setAiThinking(false);
+      } else if (msg.type === "ai_thinking") {
+        setAiThinking(true);
       } else if (msg.type === "error") {
         setError((msg.data as { message: string }).message);
       }
@@ -75,5 +79,5 @@ export function useGameSocket(gameId: string | null) {
     }
   }, []);
 
-  return { gameState, connected, error, sendMove, sendUndo, sendResign };
+  return { gameState, connected, aiThinking, error, sendMove, sendUndo, sendResign };
 }

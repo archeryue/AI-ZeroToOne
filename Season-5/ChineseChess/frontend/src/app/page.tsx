@@ -16,7 +16,7 @@ export default function Home() {
   const [playerColor, setPlayerColor] = useState<"red" | "black">("red");
   const [aiDepth, setAiDepth] = useState(3);
 
-  const { gameState, connected, error, sendMove, sendUndo, sendResign } =
+  const { gameState, connected, aiThinking, error, sendMove, sendUndo, sendResign } =
     useGameSocket(gameId);
 
   const handleNewGame = useCallback(async () => {
@@ -197,7 +197,7 @@ export default function Home() {
 
         {/* Side panel */}
         <div className="bg-stone-800 p-6 rounded-xl shadow-2xl w-full lg:w-72 space-y-6">
-          <GameStatus gameState={gameState} connected={connected} />
+          <GameStatus gameState={gameState} connected={connected} aiThinking={aiThinking} />
           <GameControls
             onNewGame={() => {
               setGameId(null);

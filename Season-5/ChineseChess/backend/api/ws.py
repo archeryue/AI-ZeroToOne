@@ -1,5 +1,6 @@
 """WebSocket handler for real-time game communication."""
 
+import asyncio
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from api.game_manager import game_manager
@@ -49,13 +50,20 @@ async def game_websocket(websocket: WebSocket, game_id: str):
                     "data": session.to_state_dict(),
                 })
 
-                # AI response
+                # AI response — run in thread so the player move flushes first
                 if (
                     session.ai
                     and session.game.status.value == "playing"
                     and session.game.current_turn == session.ai_color
                 ):
-                    ai_move = session.ai.choose_move(session.game)
+                    await websocket.send_json({
+                        "type": "ai_thinking",
+                        "data": {},
+                    })
+                    loop = asyncio.get_event_loop()
+                    ai_move = await loop.run_in_executor(
+                        None, session.ai.choose_move, session.game
+                    )
                     session.game.make_move(
                         ai_move.from_row, ai_move.from_col,
                         ai_move.to_row, ai_move.to_col,

@@ -5,9 +5,10 @@ import { GameState } from "@/lib/types";
 interface GameStatusProps {
   gameState: GameState;
   connected: boolean;
+  aiThinking: boolean;
 }
 
-export default function GameStatus({ gameState, connected }: GameStatusProps) {
+export default function GameStatus({ gameState, connected, aiThinking }: GameStatusProps) {
   const { current_turn, status, in_check, player_color, ai_type } = gameState;
 
   const statusText = () => {
@@ -62,6 +63,9 @@ export default function GameStatus({ gameState, connected }: GameStatusProps) {
           </span>
         </div>
         <div>Opponent: {ai_type}</div>
+        {aiThinking && (
+          <div className="text-amber-400 animate-pulse">AI is thinking...</div>
+        )}
       </div>
     </div>
   );
