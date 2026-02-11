@@ -48,6 +48,8 @@
 
 ### Season 6: AI Engineering
  - AI Engineering basics
- - Large-scale Training & Efficient Training
+ - Large-scale Training
  - Inference Optimization
  - Model Lightweighting
+ - Evaluation
+ - RL Framework
