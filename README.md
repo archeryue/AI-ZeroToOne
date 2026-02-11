@@ -48,8 +48,8 @@
 
 ### Season 6: AI Engineering
  - AI Engineering basics
- - Large-scale Training
- - Inference Optimization
- - Model Lightweighting
+ - Large-scale Training (DP -> PP -> TP -> ZeRo)
+ - Inference Optimization (KVCache, FlashAttention, PagedAttention)
+ - Model Lightweighting (Quantization, Distillation, LoRA)
  - Evaluation
  - RL Framework
