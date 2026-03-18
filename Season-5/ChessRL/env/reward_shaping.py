@@ -12,13 +12,18 @@ from engine.board import ROWS, COLS, GENERAL
 # Piece values (same scale as Greedy AI, excluding General)
 PIECE_VALUES = {
     # GENERAL: excluded — capturing General ends the game (terminal reward covers it)
-    2: 20,    # Advisor
-    3: 20,    # Elephant
-    4: 40,    # Horse
-    5: 90,    # Chariot
-    6: 45,    # Cannon
-    7: 10,    # Soldier
+    2: 0.1,    # Advisor   (3/30)
+    3: 0.1,    # Elephant  (3/30)
+    4: 0.167,  # Horse     (5/30)
+    5: 0.333,  # Chariot   (10/30)
+    6: 0.167,  # Cannon    (5/30)
+    7: 0.033,  # Soldier   (1/30)
 }
+
+# Terminal reward for win/loss
+# Ratio preserved: win(1.0) >> max capturable material(~2.1)
+# Win is still the dominant signal
+WIN_REWARD = 1.0
 
 
 class RewardShapingWrapper(gym.Wrapper):
@@ -27,16 +32,16 @@ class RewardShapingWrapper(gym.Wrapper):
     After each move, reward += (material_change) * scale, computed from
     the perspective of the player who just moved.
 
-    With scale=0.01:
-      - Capturing a Chariot (90): +0.90
-      - Capturing a Cannon (45): +0.45
-      - Capturing a Soldier (10): +0.10
-      - Losing a Chariot:        -0.90
+    With scale=1.0 (default):
+      - Capturing a Chariot (0.333): +0.333
+      - Capturing a Cannon (0.167):  +0.167
+      - Capturing a Soldier (0.033): +0.033
+      - Losing a Chariot:            -0.333
 
-    Terminal rewards (+1/-1) are preserved unchanged.
+    Terminal rewards (±1.0) dominate all possible material gains (~2.1 max).
     """
 
-    def __init__(self, env, scale: float = 0.01):
+    def __init__(self, env, scale: float = 1.0):
         super().__init__(env)
         self.scale = scale
         self._prev_material = 0.0

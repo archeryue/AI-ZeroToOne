@@ -1,0 +1,29 @@
+=== Candidate 2: PPO + Reward Shaping ===
+Device: cuda
+Model parameters: 10,284,709 (41.1 MB)
+Reward shaping scale: 1.0
+Training: 3,000,000 total steps, 64 games/batch
+
+Batch    5 | Steps:    60,635 | Games:   320 | R/B/D: 29/21/270 | Len: 189.5 | PL: -0.1192 | VL: 0.0406 | Ent: 3.475 | FPS: 214
+Batch   10 | Steps:   120,811 | Games:   640 | R/B/D: 59/48/533 | Len: 188.1 | PL: -0.0175 | VL: 0.0472 | Ent: 3.322 | FPS: 225
+Batch   15 | Steps:   181,151 | Games:   960 | R/B/D: 87/77/796 | Len: 188.6 | PL: -0.0186 | VL: 0.0366 | Ent: 3.119 | FPS: 226
+Batch   20 | Steps:   240,222 | Games:  1280 | R/B/D: 136/98/1046 | Len: 184.6 | PL: -0.0151 | VL: 0.0414 | Ent: 2.634 | FPS: 230
+  >> Eval vs Random: 0W / 2L / 18D  (win rate: 0%)
+Batch   25 | Steps:   299,937 | Games:  1600 | R/B/D: 175/121/1304 | Len: 186.6 | PL: -0.0153 | VL: 0.0255 | Ent: 2.214 | FPS: 237
+Batch   30 | Steps:   359,817 | Games:  1920 | R/B/D: 221/129/1570 | Len: 187.1 | PL: -0.0163 | VL: 0.0241 | Ent: 1.892 | FPS: 246
+Batch   35 | Steps:   412,068 | Games:  2240 | R/B/D: 354/136/1750 | Len: 163.3 | PL: -0.0138 | VL: 0.0378 | Ent: 1.450 | FPS: 252
+Batch   40 | Steps:   463,264 | Games:  2560 | R/B/D: 478/147/1935 | Len: 160.0 | PL: -0.0184 | VL: 0.0371 | Ent: 1.389 | FPS: 259
+  >> Eval vs Random: 7W / 0L / 13D  (win rate: 35%)
+Batch   45 | Steps:   514,845 | Games:  2880 | R/B/D: 583/157/2140 | Len: 161.2 | PL: 0.0528 | VL: 0.0514 | Ent: 1.080 | FPS: 264
+Batch   50 | Steps:   562,149 | Games:  3200 | R/B/D: 701/168/2331 | Len: 147.8 | PL: -0.1948 | VL: 0.0431 | Ent: 1.092 | FPS: 268
+Batch   55 | Steps:   608,310 | Games:  3520 | R/B/D: 824/184/2512 | Len: 144.3 | PL: -0.0278 | VL: 0.0440 | Ent: 0.932 | FPS: 271
+Batch   60 | Steps:   656,322 | Games:  3840 | R/B/D: 940/204/2696 | Len: 150.0 | PL: -0.0156 | VL: 0.0383 | Ent: 1.195 | FPS: 275
+  >> Eval vs Random: 16W / 0L / 4D  (win rate: 80%)
+Batch   65 | Steps:   706,303 | Games:  4160 | R/B/D: 1047/214/2899 | Len: 156.2 | PL: -0.0058 | VL: 0.0292 | Ent: 0.975 | FPS: 279
+Batch   70 | Steps:   762,222 | Games:  4480 | R/B/D: 1106/234/3140 | Len: 174.7 | PL: -0.0078 | VL: 0.0189 | Ent: 0.972 | FPS: 283
+Batch   75 | Steps:   820,789 | Games:  4800 | R/B/D: 1153/246/3401 | Len: 183.0 | PL: -0.1102 | VL: 0.0235 | Ent: 0.977 | FPS: 286
+Batch   80 | Steps:   879,326 | Games:  5120 | R/B/D: 1204/254/3662 | Len: 182.9 | PL: 0.0105 | VL: 0.0160 | Ent: 0.962 | FPS: 289
+  >> Eval vs Random: 12W / 1L / 7D  (win rate: 60%)
+Batch   85 | Steps:   936,962 | Games:  5440 | R/B/D: 1258/264/3918 | Len: 180.1 | PL: -0.0090 | VL: 0.0211 | Ent: 1.029 | FPS: 291
+Batch   90 | Steps:   994,747 | Games:  5760 | R/B/D: 1319/270/4171 | Len: 180.6 | PL: 0.0189 | VL: 0.0189 | Ent: 0.958 | FPS: 292
+Batch   95 | Steps: 1,051,233 | Games:  6080 | R/B/D: 1387/270/4423 | Len: 176.5 | PL: 0.0384 | VL: 0.0251 | Ent: 0.932 | FPS: 292

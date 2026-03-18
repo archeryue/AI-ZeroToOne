@@ -29,7 +29,7 @@ import torch
 from engine.board import RED, BLACK
 from engine.game import GameStatus
 from env.chess_env import ChineseChessEnv
-from env.reward_shaping import RewardShapingWrapper
+from env.reward_shaping import RewardShapingWrapper, WIN_REWARD
 from env.action_space import encode_move
 from agents.ppo_agent import PPOAgent
 from ai.random_ai import RandomAI
@@ -99,10 +99,10 @@ def play_self_play_game(env, agent):
 
         if done:
             if env.game.status == GameStatus.RED_WIN and len(black["rewards"]) > 0:
-                black["rewards"][-1] = -1.0
+                black["rewards"][-1] = -WIN_REWARD
                 black["dones"][-1] = True
             elif env.game.status == GameStatus.BLACK_WIN and len(red["rewards"]) > 0:
-                red["rewards"][-1] = -1.0
+                red["rewards"][-1] = -WIN_REWARD
                 red["dones"][-1] = True
             else:
                 if len(red["rewards"]) > 0:
@@ -167,9 +167,9 @@ def play_vs_opponent_game(env, agent, opponent):
             if len(traj["rewards"]) > 0:
                 status = env.game.status
                 if status == GameStatus.RED_WIN:
-                    traj["rewards"][-1] = 1.0 if ppo_color == RED else -1.0
+                    traj["rewards"][-1] = WIN_REWARD if ppo_color == RED else -WIN_REWARD
                 elif status == GameStatus.BLACK_WIN:
-                    traj["rewards"][-1] = 1.0 if ppo_color == BLACK else -1.0
+                    traj["rewards"][-1] = WIN_REWARD if ppo_color == BLACK else -WIN_REWARD
                 traj["dones"][-1] = True
 
             ppo_won = (

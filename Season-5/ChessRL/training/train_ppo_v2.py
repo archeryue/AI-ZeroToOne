@@ -23,7 +23,7 @@ import torch
 from engine.board import RED, BLACK
 from engine.game import GameStatus
 from env.chess_env import ChineseChessEnv
-from env.reward_shaping import RewardShapingWrapper
+from env.reward_shaping import RewardShapingWrapper, WIN_REWARD
 from agents.ppo_agent import PPOAgent
 
 # ---------- Hyperparameters ----------
@@ -34,8 +34,8 @@ PRINT_EVERY = 5
 EVAL_EVERY = 20
 EVAL_GAMES = 20
 SAVE_EVERY = 50
-REWARD_SCALE = 0.01    # material delta scale
-SAVE_DIR = os.path.join(SCRIPT_DIR, "candidate2")
+REWARD_SCALE = 1.0     # material delta scale (new: win=30, chariot=10, cannon/horse=5, advisor/elephant=3, soldier=1)
+SAVE_DIR = os.path.join(SCRIPT_DIR, "candidate2_v2")
 # --------------------------------------
 
 
@@ -69,12 +69,12 @@ def play_game(env, agent):
         if done:
             # Assign terminal reward to the losing side
             # Note: the shaped reward is already included by the wrapper,
-            # but we still need to assign the -1 terminal to the loser
+            # but we still need to assign the terminal penalty to the loser
             if env.game.status == GameStatus.RED_WIN and len(black["rewards"]) > 0:
-                black["rewards"][-1] = -1.0
+                black["rewards"][-1] = -WIN_REWARD
                 black["dones"][-1] = True
             elif env.game.status == GameStatus.BLACK_WIN and len(red["rewards"]) > 0:
-                red["rewards"][-1] = -1.0
+                red["rewards"][-1] = -WIN_REWARD
                 red["dones"][-1] = True
             else:
                 if len(red["rewards"]) > 0:
