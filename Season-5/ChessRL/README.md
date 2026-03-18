@@ -421,6 +421,48 @@ Parameters: ~26.3M
 
 ---
 
+## Insights
+
+### 1. Reward Shaping: Not Helpful, Bad Design is Harmful
+
+| Comparison | vs Random | vs Greedy | vs Minimax |
+|---|---|---|---|
+| Candidate 1 (no shaping) | 65% | 12.5% | 10% |
+| Candidate 2 v1 (bad scale) | 51% | 9% | 0% |
+| Candidate 2 v2 (balanced) | 66% | 12.5% | 2.5% |
+
+- Adding reward shaping with bad proportions (v1: chariot=0.9 vs win=1.0) made the agent **worse** than no shaping at all — it learned to chase captures instead of checkmate
+- Even with balanced proportions (v2), reward shaping barely improved over the sparse-reward baseline (66% vs 65%)
+- **Takeaway:** Reward shaping is a double-edged sword. If piece values are poorly calibrated relative to the terminal reward, the agent optimizes for the wrong objective. When done right, the improvement is marginal — the real bottleneck is elsewhere
+
+### 2. Curriculum: Overfits Easy AI, Underfits Hard AI
+
+| Comparison | vs Random | vs Greedy | vs Minimax |
+|---|---|---|---|
+| Candidate 2 v2 (no curriculum) | 66% | 12.5% | 2.5% |
+| Candidate 3 v2 (curriculum) | 84% | 17.5% | 0% |
+
+- Curriculum dramatically improves vs Random (66% → 84%) because Phase A dedicates 1M steps to playing Random — the agent gets very good at exploiting weak play
+- vs Greedy improves modestly (12.5% → 17.5%), but still dominated
+- vs Minimax actually got **worse** (2.5% → 0%) — Phase C only allocates 1M steps with 25% Minimax games, far too little to learn tactical play
+- **Takeaway:** Curriculum creates a specialization trap. The agent overfits to the opponents it trains against most. To improve vs Minimax, it likely needs much more training time in Phase C, or a more gradual curriculum that doesn't move on from hard opponents too quickly
+
+### 3. Pure PPO Has a Fundamental Ceiling
+
+- No PPO variant scored above 0% wins against Minimax (depth 3) across all experiments
+- Even the best candidate (3v2) only manages 17.5% score vs Greedy (1-move lookahead)
+- PPO learns reactive patterns (what to do given a board state) but cannot plan ahead
+- **Takeaway:** Policy-only RL cannot compete with search-based AI in chess. The agent needs look-ahead ability at inference time (MCTS) to bridge this gap — which is exactly what Candidates 4 and 5 aim to provide
+
+### 4. Red vs Black Asymmetry
+
+- Across all candidates, the agent is significantly stronger as Red (first mover) than Black
+- Candidate 3 v2: 20/20 wins as Red vs Random, but only 7/20 as Black
+- As Black, the agent defaults to defensive play that draws but rarely wins
+- **Takeaway:** Self-play training naturally develops a Red-biased strategy due to first-move advantage. Future training could explicitly balance Red/Black experience or add Black-specific objectives
+
+---
+
 ## Experiments Log
 
 | Date | Experiment | Result |
