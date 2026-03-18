@@ -44,8 +44,8 @@ PRINT_EVERY = 5
 EVAL_EVERY = 20
 EVAL_GAMES = 20
 SAVE_EVERY = 50
-REWARD_SCALE = 0.01
-SAVE_DIR = os.path.join(SCRIPT_DIR, "candidate3")
+REWARD_SCALE = 1.0
+SAVE_DIR = os.path.join(SCRIPT_DIR, "candidate3_v2")
 # --------------------------------------
 
 # Curriculum schedule: (step_threshold, [(opponent, weight), ...])

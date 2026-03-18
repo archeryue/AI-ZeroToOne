@@ -24,7 +24,9 @@ All candidates are evaluated against 3 AIs from `ChineseChess/backend/ai/`:
 | **Greedy** | 1-move lookahead, maximizes material value | Captures well, no depth |
 | **Minimax (depth=3)** | Alpha-beta pruning, material + positional eval | Tactical, plans 3 moves ahead |
 
-**Evaluation format:** 20 games per opponent (10 as Red, 10 as Black), 300-step max.
+**Evaluation format:** 20 games per side (40 total) per opponent, 300-step max.
+
+**Scoring:** Chess tournament scoring — Win=1, Draw=0.5, Loss=0. Score% = (W + 0.5×D) / Total × 100.
 
 ---
 
@@ -118,7 +120,7 @@ Parameters: 10,284,709 (~10.3M)
 |---|---|
 | PPO (Red) vs Random (Black) | 7W / 0L / 3D |
 | PPO (Black) vs Random (Red) | 0W / 1L / 9D |
-| **Total** | **PPO 7W / Random 1W / 12D (35% win rate)** |
+| **Total** | **PPO 7W / Random 1W / 12D — Score: 65%** |
 
 **PPO vs Greedy (20 games):**
 
@@ -126,7 +128,7 @@ Parameters: 10,284,709 (~10.3M)
 |---|---|
 | PPO (Red) vs Greedy (Black) | 0W / 8L / 2D |
 | PPO (Black) vs Greedy (Red) | 0W / 6L / 4D |
-| **Total** | **PPO 0W / Greedy 15W / 5D (0% win rate)** |
+| **Total** | **PPO 0W / Greedy 15W / 5D — Score: 12.5%** |
 
 **PPO vs Minimax depth-3 (10 games):**
 
@@ -134,7 +136,7 @@ Parameters: 10,284,709 (~10.3M)
 |---|---|
 | PPO (Red) vs Minimax (Black) | 0W / 3L / 2D |
 | PPO (Black) vs Minimax (Red) | 0W / 5L / 0D |
-| **Total** | **PPO 0W / Minimax 8W / 2D (0% win rate)** |
+| **Total** | **PPO 0W / Minimax 8W / 2D — Score: 10%** |
 
 ### Analysis
 
@@ -181,7 +183,7 @@ The biggest problem with Candidate 1 is **sparse reward** — the agent only lea
 |---|---|
 | PPO (Red) vs Random (Black) | 5W / 3L / 12D |
 | PPO (Black) vs Random (Red) | 0W / 1L / 19D |
-| **Total** | **PPO 5W / Random 4W / 31D (12% win rate)** |
+| **Total** | **PPO 5W / Random 4W / 31D — Score: 51%** |
 
 **Candidate 2 vs Greedy (40 games):**
 
@@ -189,7 +191,7 @@ The biggest problem with Candidate 1 is **sparse reward** — the agent only lea
 |---|---|
 | PPO (Red) vs Greedy (Black) | 0W / 15L / 5D |
 | PPO (Black) vs Greedy (Red) | 0W / 18L / 2D |
-| **Total** | **PPO 0W / Greedy 33W / 7D (0% win rate)** |
+| **Total** | **PPO 0W / Greedy 33W / 7D — Score: 9%** |
 
 **Candidate 2 vs Minimax depth-3 (40 games):**
 
@@ -197,15 +199,31 @@ The biggest problem with Candidate 1 is **sparse reward** — the agent only lea
 |---|---|
 | PPO (Red) vs Minimax (Black) | 0W / 20L / 0D |
 | PPO (Black) vs Minimax (Red) | 0W / 20L / 0D |
-| **Total** | **PPO 0W / Minimax 40W / 0D (0% win rate)** |
+| **Total** | **PPO 0W / Minimax 40W / 0D — Score: 0%** |
 
 ### Analysis
 
-- Reward shaping did NOT improve performance — actually slightly worse than Candidate 1 (25% vs 35% vs Random)
+- Reward shaping did NOT improve performance — slightly worse than Candidate 1 (51% vs 65% score vs Random)
 - Still 0% against Greedy and Minimax
 - The shaped rewards may have caused the agent to optimize for captures rather than winning
 - Minimax wins even faster (19-77 steps) — no draws this time, total domination
 - **Conclusion:** Dense rewards alone aren't enough. The problem isn't just credit assignment — the agent fundamentally lacks look-ahead ability
+
+### Candidate 2 v2: Balanced Reward Values
+
+Retrained with balanced piece values (win=1.0, chariot=0.333, cannon/horse=0.167, advisor/elephant=0.1, soldier=0.033) instead of the original scale (win=1.0, chariot=0.9, cannon=0.45). The old values made two Chariots worth more than winning.
+
+**Training:** 3M steps, 16,960 games, 2.2 hours, 388 FPS. Best win rate vs random: **90%**.
+
+| Opponent | PPO Wins | Opp Wins | Draws | Score |
+|---|---|---|---|---|
+| Random (40g) | 14 (13R+1B) | 1 (0R+1B) | 25 | **66%** |
+| Greedy (40g) | 0 | 30 (14R+16B) | 10 | **12.5%** |
+| Minimax d=3 (40g) | 0 | 38 (18R+20B) | 2 | **2.5%** |
+
+- Big improvement over v1 (51% → 66% vs Random) — balanced rewards helped significantly
+- 2 draws vs Minimax (vs 0 in v1) — slightly more resilient
+- Still 0% vs Greedy and Minimax — confirms PPO without search can't compete with tactical AIs
 
 ---
 
@@ -246,7 +264,7 @@ Even with reward shaping, pure self-play has a weakness: if the agent develops b
 |---|---|
 | PPO (Red) vs Random (Black) | 14W / 0L / 6D |
 | PPO (Black) vs Random (Red) | 6W / 0L / 14D |
-| **Total** | **PPO 20W / Random 0W / 20D (50% win rate)** |
+| **Total** | **PPO 20W / Random 0W / 20D — Score: 75%** |
 
 **Candidate 3 vs Greedy (40 games):**
 
@@ -254,7 +272,7 @@ Even with reward shaping, pure self-play has a weakness: if the agent develops b
 |---|---|
 | PPO (Red) vs Greedy (Black) | 1W / 14L / 5D |
 | PPO (Black) vs Greedy (Red) | 0W / 10L / 10D |
-| **Total** | **PPO 1W / Greedy 24W / 15D (2% win rate)** |
+| **Total** | **PPO 1W / Greedy 24W / 15D — Score: 21%** |
 
 **Candidate 3 vs Minimax depth-3 (40 games):**
 
@@ -262,16 +280,33 @@ Even with reward shaping, pure self-play has a weakness: if the agent develops b
 |---|---|
 | PPO (Red) vs Minimax (Black) | 0W / 20L / 0D |
 | PPO (Black) vs Minimax (Red) | 0W / 20L / 0D |
-| **Total** | **PPO 0W / Minimax 40W / 0D (0% win rate)** |
+| **Total** | **PPO 0W / Minimax 40W / 0D — Score: 0%** |
 
 ### Analysis
 
-- Big improvement over Candidate 2 vs Random: 50% win rate (vs 12%) — never loses, many draws
+- Big improvement over Candidate 2 vs Random: 75% score (vs 51%) — never loses, many draws
 - First win against Greedy (1W) — progress but still dominated
 - Still 0% vs Minimax — no draws at all, gets crushed in ~20-30 moves
 - As Black, agent is much more defensive (draws frequently) — learned to survive but not attack
 - Curriculum helped learn from stronger opponents, but PPO policy alone still lacks look-ahead
 - **Conclusion:** Curriculum training is the best improvement so far for pure PPO, but hitting a ceiling — the agent needs search (MCTS) to compete with tactical AIs
+
+### Candidate 3 v2: Balanced Reward Values
+
+Retrained with same balanced rewards as Candidate 2 v2 (win=1.0, chariot=0.333, etc.) + curriculum.
+
+**Training:** 3M steps, 19,136 games, 2.8 hours, 304 FPS. Best win rate vs random: **100%**.
+
+| Opponent | PPO Wins | Opp Wins | Draws | Score |
+|---|---|---|---|---|
+| Random (40g) | 27 (20R+7B) | 0 | 13 | **84%** |
+| Greedy (40g) | 1 | 27 | 12 | **17.5%** |
+| Minimax d=3 (40g) | 0 | 40 | 0 | **0%** |
+
+- Best result yet: 84% score vs Random, **perfect 20/20 as Red**
+- As Black still draws often (13/20) — defensive but not aggressive enough
+- Balanced rewards + curriculum is the winning combo for pure PPO
+- Still 0% vs Minimax — confirms PPO without search fundamentally can't compete
 
 ---
 
@@ -319,7 +354,7 @@ Estimated params: ~3-5M
 
 ### Benchmark vs Game AIs
 
-| Opponent | Mini-AZ Wins | Opponent Wins | Draws | Win Rate |
+| Opponent | Mini-AZ Wins | Opponent Wins | Draws | Score |
 |---|---|---|---|---|
 | Random | | | | |
 | Greedy | | | | |
@@ -364,7 +399,7 @@ Parameters: ~26.3M
 
 ### Benchmark vs Game AIs
 
-| Opponent | AlphaZero Wins | Opponent Wins | Draws | Win Rate |
+| Opponent | AlphaZero Wins | Opponent Wins | Draws | Score |
 |---|---|---|---|---|
 | Random | | | | |
 | Greedy | | | | |
@@ -376,9 +411,11 @@ Parameters: ~26.3M
 
 | Candidate | vs Random | vs Greedy | vs Minimax (d=3) |
 |---|---|---|---|
-| 1. PPO Self-Play | 7W/1L/12D (35%) | 0W/15L/5D (0%) | 0W/8L/2D (0%) |
-| 2. PPO + Reward Shaping | 5W/4L/31D (12%) | 0W/33L/7D (0%) | 0W/40L/0D (0%) |
-| 3. PPO + Reward + Curriculum | 20W/0L/20D (50%) | 1W/24L/15D (2%) | 0W/40L/0D (0%) |
+| 1. PPO Self-Play | 7W/1L/12D (65%) | 0W/15L/5D (12.5%) | 0W/8L/2D (10%) |
+| 2. PPO + Reward Shaping (v1) | 5W/4L/31D (51%) | 0W/33L/7D (9%) | 0W/40L/0D (0%) |
+| 2. PPO + Reward Shaping (v2) | 14W/1L/25D (66%) | 0W/30L/10D (12.5%) | 0W/38L/2D (2.5%) |
+| 3. PPO + Reward + Curriculum (v1) | 20W/0L/20D (75%) | 1W/24L/15D (21%) | 0W/40L/0D (0%) |
+| 3. PPO + Reward + Curriculum (v2) | 27W/0L/13D (84%) | 1W/27L/12D (17.5%) | 0W/40L/0D (0%) |
 | 4. Mini MCTS + NN | — | — | — |
 | 5. Full AlphaZero | — | — | — |
 
@@ -389,14 +426,19 @@ Parameters: ~26.3M
 | Date | Experiment | Result |
 |---|---|---|
 | 2026-03-17 | Candidate 1: PPO 3M self-play training | 90% win rate vs random (during training eval) |
-| 2026-03-17 | Candidate 1 vs Random (20 games) | 7W/1L/12D — wins as Red, mostly draws as Black |
-| 2026-03-17 | Candidate 1 vs Greedy (20 games) | 0W/15L/5D — can't compete with 1-move lookahead |
-| 2026-03-17 | Candidate 1 vs Minimax depth-3 (10 games) | 0W/8L/2D — no tactical awareness |
+| 2026-03-17 | Candidate 1 vs Random (20 games) | 7W/1L/12D (65%) — wins as Red, mostly draws as Black |
+| 2026-03-17 | Candidate 1 vs Greedy (20 games) | 0W/15L/5D (12.5%) — can't compete with 1-move lookahead |
+| 2026-03-17 | Candidate 1 vs Minimax depth-3 (10 games) | 0W/8L/2D (10%) — no tactical awareness |
 | 2026-03-17 | Candidate 2: PPO+RewardShaping 3M training | 60% best win rate vs random (during training eval) |
-| 2026-03-17 | Candidate 2 vs Random (40 games) | 5W/4L/31D (12%) — worse than Candidate 1 |
-| 2026-03-17 | Candidate 2 vs Greedy (40 games) | 0W/33L/7D — still can't compete |
-| 2026-03-17 | Candidate 2 vs Minimax depth-3 (40 games) | 0W/40L/0D — total domination by Minimax |
-| 2026-03-17 | Candidate 3: PPO+RewardShaping+Curriculum 3M training | 100% best win rate vs random, 2.3hrs |
-| 2026-03-17 | Candidate 3 vs Random (40 games) | 20W/0L/20D (50%) — best so far, never loses |
-| 2026-03-17 | Candidate 3 vs Greedy (40 games) | 1W/24L/15D (2%) — first win vs Greedy! |
-| 2026-03-17 | Candidate 3 vs Minimax depth-3 (40 games) | 0W/40L/0D — still no chance |
+| 2026-03-17 | Candidate 2 vs Random (40 games) | 5W/4L/31D (51%) — worse than Candidate 1 |
+| 2026-03-17 | Candidate 2 vs Greedy (40 games) | 0W/33L/7D (9%) — still can't compete |
+| 2026-03-17 | Candidate 2 vs Minimax depth-3 (40 games) | 0W/40L/0D (0%) — total domination by Minimax |
+| 2026-03-18 | Candidate 2 v2: Retrain with balanced rewards (win=1, chariot=0.333) | 90% best eval win rate, 66% score vs random |
+| 2026-03-17 | Candidate 3: PPO+RewardShaping+Curriculum 3M training | 100% best eval win rate vs random, 2.3hrs |
+| 2026-03-17 | Candidate 3 vs Random (40 games) | 20W/0L/20D (75%) — never loses |
+| 2026-03-17 | Candidate 3 vs Greedy (40 games) | 1W/24L/15D (21%) — first win vs Greedy! |
+| 2026-03-17 | Candidate 3 vs Minimax depth-3 (40 games) | 0W/40L/0D (0%) — still no chance |
+| 2026-03-18 | Candidate 3 v2: Retrain with balanced rewards + curriculum | 100% best eval win rate, 84% score vs random — best pure PPO |
+| 2026-03-18 | Candidate 3 v2 vs Random (40 games) | 27W/0L/13D (84%) — perfect 20/20 as Red |
+| 2026-03-18 | Candidate 3 v2 vs Greedy (40 games) | 1W/27L/12D (17.5%) — still dominated |
+| 2026-03-18 | Candidate 3 v2 vs Minimax depth-3 (40 games) | 0W/40L/0D (0%) — PPO ceiling reached |

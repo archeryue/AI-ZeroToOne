@@ -1,0 +1,88 @@
+=== Candidate 3: PPO + Reward Shaping + Curriculum ===
+Device: cuda
+Model parameters: 10,284,709
+Reward shaping scale: 1.0
+Training: 3,000,000 total steps, 64 games/batch
+Curriculum: Phase A (vs Random) → Phase B (+Greedy) → Phase C (+Minimax)
+
+Batch    5 [Phase A] | Steps:    59,869 | Games:   320 | Self R/B: 11/11 | vsAI W/L: 20/11 | Len: 187.1 | PL: -0.0163 | VL: 0.0418 | Ent: 3.456 | FPS: 282
+Batch   10 [Phase A] | Steps:   120,693 | Games:   640 | Self R/B: 20/23 | vsAI W/L: 36/20 | Len: 190.1 | PL: 0.0173 | VL: 0.0343 | Ent: 3.178 | FPS: 293
+Batch   15 [Phase A] | Steps:   180,575 | Games:   960 | Self R/B: 36/36 | vsAI W/L: 51/33 | Len: 187.1 | PL: -0.0686 | VL: 0.0272 | Ent: 3.183 | FPS: 307
+Batch   20 [Phase A] | Steps:   240,945 | Games:  1280 | Self R/B: 50/45 | vsAI W/L: 73/36 | Len: 188.7 | PL: -0.0267 | VL: 0.0400 | Ent: 2.754 | FPS: 320
+  >> Eval vs Random: 7W / 0L / 13D  (win rate: 35%)
+Batch   25 [Phase A] | Steps:   298,700 | Games:  1600 | Self R/B: 89/53 | vsAI W/L: 100/44 | Len: 180.5 | PL: -0.0229 | VL: 0.0392 | Ent: 2.421 | FPS: 314
+Batch   30 [Phase A] | Steps:   356,711 | Games:  1920 | Self R/B: 115/59 | vsAI W/L: 138/50 | Len: 181.3 | PL: 0.0118 | VL: 0.0274 | Ent: 2.309 | FPS: 313
+Batch   35 [Phase A] | Steps:   411,653 | Games:  2240 | Self R/B: 159/75 | vsAI W/L: 182/57 | Len: 171.7 | PL: -0.0443 | VL: 0.0345 | Ent: 2.147 | FPS: 313
+Batch   40 [Phase A] | Steps:   464,837 | Games:  2560 | Self R/B: 223/85 | vsAI W/L: 232/61 | Len: 166.2 | PL: -0.0257 | VL: 0.0361 | Ent: 1.979 | FPS: 314
+  >> Eval vs Random: 5W / 1L / 14D  (win rate: 25%)
+Batch   45 [Phase A] | Steps:   513,486 | Games:  2880 | Self R/B: 318/90 | vsAI W/L: 292/64 | Len: 152.0 | PL: -0.0226 | VL: 0.0465 | Ent: 1.684 | FPS: 313
+Batch   50 [Phase A] | Steps:   562,406 | Games:  3200 | Self R/B: 407/95 | vsAI W/L: 355/66 | Len: 152.9 | PL: 0.0326 | VL: 0.0510 | Ent: 1.665 | FPS: 313
+Batch   55 [Phase A] | Steps:   610,280 | Games:  3520 | Self R/B: 495/103 | vsAI W/L: 424/70 | Len: 149.6 | PL: -0.0836 | VL: 0.0408 | Ent: 1.587 | FPS: 314
+Batch   60 [Phase A] | Steps:   659,201 | Games:  3840 | Self R/B: 575/110 | vsAI W/L: 498/72 | Len: 152.9 | PL: 0.0764 | VL: 0.0382 | Ent: 1.604 | FPS: 316
+  >> Eval vs Random: 14W / 1L / 5D  (win rate: 70%)
+Batch   65 [Phase A] | Steps:   707,619 | Games:  4160 | Self R/B: 644/117 | vsAI W/L: 586/73 | Len: 151.3 | PL: -0.0324 | VL: 0.0363 | Ent: 1.681 | FPS: 316
+Batch   70 [Phase A] | Steps:   755,012 | Games:  4480 | Self R/B: 722/124 | vsAI W/L: 666/77 | Len: 148.1 | PL: -0.0060 | VL: 0.0331 | Ent: 1.468 | FPS: 317
+Batch   75 [Phase A] | Steps:   798,623 | Games:  4800 | Self R/B: 818/128 | vsAI W/L: 745/81 | Len: 136.3 | PL: -0.0622 | VL: 0.0306 | Ent: 1.338 | FPS: 318
+Batch   80 [Phase A] | Steps:   840,658 | Games:  5120 | Self R/B: 910/132 | vsAI W/L: 844/83 | Len: 131.4 | PL: -0.0115 | VL: 0.0297 | Ent: 1.179 | FPS: 319
+  >> Eval vs Random: 19W / 1L / 0D  (win rate: 95%)
+Batch   85 [Phase A] | Steps:   884,879 | Games:  5440 | Self R/B: 986/136 | vsAI W/L: 931/88 | Len: 138.2 | PL: -0.0449 | VL: 0.0429 | Ent: 1.145 | FPS: 318
+Batch   90 [Phase A] | Steps:   932,314 | Games:  5760 | Self R/B: 1048/144 | vsAI W/L: 1017/91 | Len: 148.2 | PL: -0.1476 | VL: 0.0453 | Ent: 1.258 | FPS: 319
+Batch   95 [Phase A] | Steps:   977,743 | Games:  6080 | Self R/B: 1134/149 | vsAI W/L: 1101/95 | Len: 142.0 | PL: -0.0226 | VL: 0.0303 | Ent: 1.267 | FPS: 320
+Batch  100 [Phase B] | Steps: 1,023,388 | Games:  6400 | Self R/B: 1220/154 | vsAI W/L: 1179/108 | Len: 142.6 | PL: 0.0592 | VL: 0.0400 | Ent: 0.905 | FPS: 321
+  >> Eval vs Random: 17W / 1L / 2D  (win rate: 85%)
+Batch  105 [Phase B] | Steps: 1,072,767 | Games:  6720 | Self R/B: 1293/157 | vsAI W/L: 1227/140 | Len: 154.3 | PL: -0.0138 | VL: 0.0453 | Ent: 0.981 | FPS: 322
+Batch  110 [Phase B] | Steps: 1,122,764 | Games:  7040 | Self R/B: 1365/165 | vsAI W/L: 1270/173 | Len: 156.2 | PL: 0.0293 | VL: 0.0479 | Ent: 0.974 | FPS: 324
+Batch  115 [Phase B] | Steps: 1,171,107 | Games:  7360 | Self R/B: 1439/173 | vsAI W/L: 1324/205 | Len: 151.1 | PL: 0.0240 | VL: 0.0404 | Ent: 1.046 | FPS: 325
+Batch  120 [Phase B] | Steps: 1,220,510 | Games:  7680 | Self R/B: 1514/179 | vsAI W/L: 1366/241 | Len: 154.4 | PL: 0.0735 | VL: 0.0447 | Ent: 0.932 | FPS: 326
+  >> Eval vs Random: 16W / 0L / 4D  (win rate: 80%)
+Batch  125 [Phase B] | Steps: 1,269,549 | Games:  8000 | Self R/B: 1593/184 | vsAI W/L: 1421/268 | Len: 153.2 | PL: -0.0130 | VL: 0.0410 | Ent: 0.837 | FPS: 327
+Batch  130 [Phase B] | Steps: 1,322,625 | Games:  8320 | Self R/B: 1634/190 | vsAI W/L: 1468/301 | Len: 165.9 | PL: -0.0150 | VL: 0.0348 | Ent: 1.069 | FPS: 329
+Batch  135 [Phase B] | Steps: 1,374,477 | Games:  8640 | Self R/B: 1688/196 | vsAI W/L: 1517/333 | Len: 162.0 | PL: -0.0122 | VL: 0.0355 | Ent: 1.112 | FPS: 330
+Batch  140 [Phase B] | Steps: 1,425,539 | Games:  8960 | Self R/B: 1753/201 | vsAI W/L: 1563/370 | Len: 159.6 | PL: -0.0939 | VL: 0.0311 | Ent: 0.985 | FPS: 331
+  >> Eval vs Random: 16W / 0L / 4D  (win rate: 80%)
+Batch  145 [Phase B] | Steps: 1,478,926 | Games:  9280 | Self R/B: 1805/206 | vsAI W/L: 1608/410 | Len: 166.8 | PL: -0.0413 | VL: 0.0314 | Ent: 0.967 | FPS: 332
+Batch  150 [Phase B] | Steps: 1,531,392 | Games:  9600 | Self R/B: 1866/211 | vsAI W/L: 1656/436 | Len: 164.0 | PL: -0.0172 | VL: 0.0346 | Ent: 1.027 | FPS: 332
+Batch  155 [Phase B] | Steps: 1,585,842 | Games:  9920 | Self R/B: 1906/213 | vsAI W/L: 1699/468 | Len: 170.2 | PL: 0.0168 | VL: 0.0243 | Ent: 1.077 | FPS: 333
+Batch  160 [Phase B] | Steps: 1,640,332 | Games: 10240 | Self R/B: 1944/218 | vsAI W/L: 1743/502 | Len: 170.3 | PL: -0.0665 | VL: 0.0317 | Ent: 1.134 | FPS: 334
+  >> Eval vs Random: 17W / 2L / 1D  (win rate: 85%)
+Batch  165 [Phase B] | Steps: 1,695,271 | Games: 10560 | Self R/B: 1976/222 | vsAI W/L: 1788/534 | Len: 171.7 | PL: -0.1348 | VL: 0.0385 | Ent: 1.057 | FPS: 334
+Batch  170 [Phase B] | Steps: 1,749,244 | Games: 10880 | Self R/B: 2011/226 | vsAI W/L: 1836/560 | Len: 168.7 | PL: -0.1406 | VL: 0.0318 | Ent: 1.060 | FPS: 335
+Batch  175 [Phase B] | Steps: 1,802,325 | Games: 11200 | Self R/B: 2055/230 | vsAI W/L: 1888/592 | Len: 165.9 | PL: 0.0095 | VL: 0.0280 | Ent: 1.078 | FPS: 335
+Batch  180 [Phase B] | Steps: 1,853,428 | Games: 11520 | Self R/B: 2119/234 | vsAI W/L: 1939/622 | Len: 159.7 | PL: 0.0153 | VL: 0.0292 | Ent: 1.003 | FPS: 336
+  >> Eval vs Random: 17W / 0L / 3D  (win rate: 85%)
+Batch  185 [Phase B] | Steps: 1,907,389 | Games: 11840 | Self R/B: 2158/235 | vsAI W/L: 1985/643 | Len: 168.6 | PL: -0.1073 | VL: 0.0198 | Ent: 1.108 | FPS: 338
+Batch  190 [Phase B] | Steps: 1,959,933 | Games: 12160 | Self R/B: 2196/238 | vsAI W/L: 2049/665 | Len: 164.2 | PL: 0.0224 | VL: 0.0402 | Ent: 1.092 | FPS: 340
+Batch  195 [Phase C] | Steps: 2,011,383 | Games: 12480 | Self R/B: 2245/246 | vsAI W/L: 2092/709 | Len: 160.8 | PL: -0.0131 | VL: 0.0582 | Ent: 0.958 | FPS: 341
+Batch  200 [Phase C] | Steps: 2,058,807 | Games: 12800 | Self R/B: 2291/247 | vsAI W/L: 2095/813 | Len: 148.2 | PL: -0.0166 | VL: 0.0371 | Ent: 1.012 | FPS: 338
+  >> Eval vs Random: 20W / 0L / 0D  (win rate: 100%)
+Batch  205 [Phase C] | Steps: 2,106,208 | Games: 13120 | Self R/B: 2329/254 | vsAI W/L: 2100/908 | Len: 148.1 | PL: -0.0418 | VL: 0.0670 | Ent: 1.028 | FPS: 335
+Batch  210 [Phase C] | Steps: 2,152,595 | Games: 13440 | Self R/B: 2382/258 | vsAI W/L: 2102/1014 | Len: 145.0 | PL: -0.0016 | VL: 0.0452 | Ent: 1.076 | FPS: 334
+Batch  215 [Phase C] | Steps: 2,200,093 | Games: 13760 | Self R/B: 2427/263 | vsAI W/L: 2102/1117 | Len: 148.4 | PL: -0.0087 | VL: 0.0438 | Ent: 1.086 | FPS: 332
+Batch  220 [Phase C] | Steps: 2,246,408 | Games: 14080 | Self R/B: 2480/266 | vsAI W/L: 2104/1220 | Len: 144.7 | PL: -0.0978 | VL: 0.0472 | Ent: 1.087 | FPS: 330
+  >> Eval vs Random: 18W / 0L / 2D  (win rate: 90%)
+Batch  225 [Phase C] | Steps: 2,294,267 | Games: 14400 | Self R/B: 2531/270 | vsAI W/L: 2106/1308 | Len: 149.6 | PL: -0.0203 | VL: 0.0416 | Ent: 1.070 | FPS: 328
+Batch  230 [Phase C] | Steps: 2,341,727 | Games: 14720 | Self R/B: 2580/272 | vsAI W/L: 2106/1411 | Len: 148.3 | PL: -0.0201 | VL: 0.0412 | Ent: 1.074 | FPS: 326
+Batch  235 [Phase C] | Steps: 2,388,498 | Games: 15040 | Self R/B: 2644/274 | vsAI W/L: 2106/1509 | Len: 146.2 | PL: -0.0189 | VL: 0.0479 | Ent: 1.028 | FPS: 325
+Batch  240 [Phase C] | Steps: 2,436,522 | Games: 15360 | Self R/B: 2688/278 | vsAI W/L: 2109/1607 | Len: 150.1 | PL: 0.0062 | VL: 0.0386 | Ent: 1.026 | FPS: 324
+  >> Eval vs Random: 16W / 0L / 4D  (win rate: 80%)
+Batch  245 [Phase C] | Steps: 2,483,519 | Games: 15680 | Self R/B: 2750/279 | vsAI W/L: 2109/1714 | Len: 146.9 | PL: -0.0147 | VL: 0.0505 | Ent: 0.975 | FPS: 323
+Batch  250 [Phase C] | Steps: 2,531,015 | Games: 16000 | Self R/B: 2800/284 | vsAI W/L: 2112/1814 | Len: 148.4 | PL: 0.0071 | VL: 0.0401 | Ent: 0.932 | FPS: 322
+Batch  255 [Phase C] | Steps: 2,578,868 | Games: 16320 | Self R/B: 2852/291 | vsAI W/L: 2116/1907 | Len: 149.5 | PL: 0.0079 | VL: 0.0492 | Ent: 0.914 | FPS: 320
+Batch  260 [Phase C] | Steps: 2,626,974 | Games: 16640 | Self R/B: 2914/293 | vsAI W/L: 2118/2000 | Len: 150.3 | PL: -0.0188 | VL: 0.0443 | Ent: 0.946 | FPS: 318
+  >> Eval vs Random: 17W / 0L / 3D  (win rate: 85%)
+Batch  265 [Phase C] | Steps: 2,676,575 | Games: 16960 | Self R/B: 2955/308 | vsAI W/L: 2119/2088 | Len: 155.0 | PL: -0.0016 | VL: 0.0565 | Ent: 1.075 | FPS: 316
+Batch  270 [Phase C] | Steps: 2,724,867 | Games: 17280 | Self R/B: 2981/329 | vsAI W/L: 2123/2183 | Len: 150.9 | PL: -0.0360 | VL: 0.0350 | Ent: 1.073 | FPS: 314
+Batch  275 [Phase C] | Steps: 2,774,008 | Games: 17600 | Self R/B: 3014/341 | vsAI W/L: 2124/2281 | Len: 153.6 | PL: 0.0591 | VL: 0.0464 | Ent: 1.149 | FPS: 312
+Batch  280 [Phase C] | Steps: 2,823,606 | Games: 17920 | Self R/B: 3059/345 | vsAI W/L: 2130/2367 | Len: 155.0 | PL: 0.0756 | VL: 0.0426 | Ent: 1.023 | FPS: 309
+  >> Eval vs Random: 13W / 0L / 7D  (win rate: 65%)
+Batch  285 [Phase C] | Steps: 2,872,072 | Games: 18240 | Self R/B: 3122/350 | vsAI W/L: 2132/2459 | Len: 151.5 | PL: -0.0731 | VL: 0.0415 | Ent: 0.995 | FPS: 308
+Batch  290 [Phase C] | Steps: 2,919,774 | Games: 18560 | Self R/B: 3186/354 | vsAI W/L: 2136/2554 | Len: 149.1 | PL: -0.0608 | VL: 0.0383 | Ent: 1.021 | FPS: 306
+Batch  295 [Phase C] | Steps: 2,967,992 | Games: 18880 | Self R/B: 3247/363 | vsAI W/L: 2139/2647 | Len: 150.7 | PL: -0.0230 | VL: 0.0524 | Ent: 1.096 | FPS: 305
+
+Training complete!
+Total steps: 3,006,754
+Total games: 19,136
+Results: Self-play R=3281 B=371 T=5916 | vs AI W=2139 L=2726
+Best win rate vs random: 100%
+Time: 165.0 min (2.8 hrs)
+Avg FPS: 304
