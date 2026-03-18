@@ -1,0 +1,31 @@
+=== Candidate 3: PPO + Reward Shaping + Curriculum ===
+Device: cuda
+Model parameters: 10,284,709
+Reward shaping scale: 0.01
+Training: 3,000,000 total steps, 64 games/batch
+Curriculum: Phase A (vs Random) → Phase B (+Greedy) → Phase C (+Minimax)
+
+Batch    5 [Phase A] | Steps:    59,881 | Games:   320 | Self R/B: 8/13 | vsAI W/L: 19/16 | Len: 187.1 | PL: -0.0160 | VL: 0.1674 | Ent: 3.428 | FPS: 239
+Batch   10 [Phase A] | Steps:   120,296 | Games:   640 | Self R/B: 25/26 | vsAI W/L: 32/30 | Len: 188.8 | PL: -0.0487 | VL: 0.1088 | Ent: 3.194 | FPS: 245
+Batch   15 [Phase A] | Steps:   179,747 | Games:   960 | Self R/B: 39/43 | vsAI W/L: 58/38 | Len: 185.8 | PL: 0.0054 | VL: 0.1082 | Ent: 2.902 | FPS: 249
+Batch   20 [Phase A] | Steps:   239,906 | Games:  1280 | Self R/B: 52/59 | vsAI W/L: 76/50 | Len: 188.0 | PL: -0.0002 | VL: 0.1089 | Ent: 2.684 | FPS: 254
+  >> Eval vs Random: 0W / 1L / 19D  (win rate: 0%)
+Batch   25 [Phase A] | Steps:   300,770 | Games:  1600 | Self R/B: 58/76 | vsAI W/L: 101/53 | Len: 190.2 | PL: -0.0228 | VL: 0.1015 | Ent: 2.431 | FPS: 256
+Batch   30 [Phase A] | Steps:   362,137 | Games:  1920 | Self R/B: 65/87 | vsAI W/L: 122/56 | Len: 191.8 | PL: -0.0190 | VL: 0.0778 | Ent: 2.323 | FPS: 252
+Batch   35 [Phase A] | Steps:   422,495 | Games:  2240 | Self R/B: 74/97 | vsAI W/L: 150/61 | Len: 188.6 | PL: -0.0927 | VL: 0.0862 | Ent: 2.105 | FPS: 220
+Batch   40 [Phase A] | Steps:   483,913 | Games:  2560 | Self R/B: 77/109 | vsAI W/L: 169/68 | Len: 191.9 | PL: -0.0179 | VL: 0.0479 | Ent: 1.986 | FPS: 203
+  >> Eval vs Random: 2W / 2L / 16D  (win rate: 10%)
+Batch   45 [Phase A] | Steps:   544,178 | Games:  2880 | Self R/B: 90/124 | vsAI W/L: 200/71 | Len: 188.3 | PL: 0.1079 | VL: 0.0716 | Ent: 2.123 | FPS: 184
+Batch   50 [Phase A] | Steps:   604,047 | Games:  3200 | Self R/B: 119/133 | vsAI W/L: 231/75 | Len: 187.1 | PL: -0.0162 | VL: 0.0696 | Ent: 2.063 | FPS: 171
+Batch   55 [Phase A] | Steps:   664,042 | Games:  3520 | Self R/B: 145/145 | vsAI W/L: 264/79 | Len: 187.5 | PL: -0.0409 | VL: 0.0715 | Ent: 1.952 | FPS: 162
+Batch   60 [Phase A] | Steps:   723,849 | Games:  3840 | Self R/B: 166/162 | vsAI W/L: 293/82 | Len: 186.9 | PL: -0.0178 | VL: 0.0613 | Ent: 1.850 | FPS: 156
+  >> Eval vs Random: 7W / 0L / 13D  (win rate: 35%)
+=== Candidate 3: PPO + Reward Shaping + Curriculum ===
+Device: cuda
+Model parameters: 10,284,709
+Reward shaping scale: 0.01
+Training: 3,000,000 total steps, 64 games/batch
+Curriculum: Phase A (vs Random) → Phase B (+Greedy) → Phase C (+Minimax)
+
+Resumed from /home/start-up/AI-ZeroToOne/Season-5/ChessRL/training/candidate3/ppo_checkpoint.pt
+Batch    5 [Phase A] | Steps:    58,751 | Games:   320 | Self R/B: 43/11 | vsAI W/L: 38/4 | Len: 183.6 | PL: 0.2610 | VL: 0.0928 | Ent: 1.956 | FPS: 296

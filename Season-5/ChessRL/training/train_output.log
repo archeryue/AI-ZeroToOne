@@ -1,0 +1,84 @@
+Device: cuda
+Model parameters: 10,284,709 (41.1 MB)
+Training: 3,000,000 total steps, 64 games/batch
+Max steps/game: 200
+
+Batch    5 | Steps:    59,950 | Games:   320 | R/B/D: 30/26/264 | Len: 187.3 | PL: -0.0314 | VL: 0.0087 | Ent: 3.433 | FPS: 263
+Batch   10 | Steps:   120,168 | Games:   640 | R/B/D: 58/53/529 | Len: 188.2 | PL: -0.0453 | VL: 0.0126 | Ent: 3.291 | FPS: 247
+Batch   15 | Steps:   180,822 | Games:   960 | R/B/D: 90/68/802 | Len: 189.5 | PL: 0.0008 | VL: 0.0130 | Ent: 3.319 | FPS: 242
+Batch   20 | Steps:   241,563 | Games:  1280 | R/B/D: 121/86/1073 | Len: 189.8 | PL: -0.1606 | VL: 0.0280 | Ent: 3.193 | FPS: 242
+  >> Eval vs Random: 2W / 2L / 16D  (win rate: 10%)
+Batch   25 | Steps:   302,932 | Games:  1600 | R/B/D: 156/104/1340 | Len: 191.8 | PL: -0.0101 | VL: 0.0128 | Ent: 2.931 | FPS: 244
+Batch   30 | Steps:   363,228 | Games:  1920 | R/B/D: 192/122/1606 | Len: 188.4 | PL: -0.0170 | VL: 0.0116 | Ent: 3.154 | FPS: 243
+Batch   35 | Steps:   424,682 | Games:  2240 | R/B/D: 222/136/1882 | Len: 192.0 | PL: -0.0308 | VL: 0.0147 | Ent: 3.123 | FPS: 242
+Batch   40 | Steps:   484,796 | Games:  2560 | R/B/D: 270/148/2142 | Len: 187.9 | PL: -0.0208 | VL: 0.0202 | Ent: 2.908 | FPS: 241
+  >> Eval vs Random: 0W / 1L / 19D  (win rate: 0%)
+Batch   45 | Steps:   543,481 | Games:  2880 | R/B/D: 335/171/2374 | Len: 183.4 | PL: -0.0160 | VL: 0.0201 | Ent: 2.680 | FPS: 240
+Batch   50 | Steps:   599,826 | Games:  3200 | R/B/D: 426/182/2592 | Len: 176.1 | PL: -0.0416 | VL: 0.0226 | Ent: 2.601 | FPS: 241
+Batch   55 | Steps:   655,792 | Games:  3520 | R/B/D: 522/202/2796 | Len: 174.9 | PL: -0.0180 | VL: 0.0296 | Ent: 2.466 | FPS: 241
+Batch   60 | Steps:   708,551 | Games:  3840 | R/B/D: 645/220/2975 | Len: 164.9 | PL: 0.0235 | VL: 0.0416 | Ent: 2.452 | FPS: 242
+  >> Eval vs Random: 16W / 0L / 4D  (win rate: 80%)
+Batch   65 | Steps:   759,642 | Games:  4160 | R/B/D: 790/228/3142 | Len: 159.7 | PL: 0.0350 | VL: 0.0342 | Ent: 2.344 | FPS: 243
+Batch   70 | Steps:   811,291 | Games:  4480 | R/B/D: 897/243/3340 | Len: 161.4 | PL: -0.0624 | VL: 0.0245 | Ent: 2.080 | FPS: 243
+Batch   75 | Steps:   865,191 | Games:  4800 | R/B/D: 999/259/3542 | Len: 168.4 | PL: 0.2018 | VL: 0.0472 | Ent: 2.261 | FPS: 244
+Batch   80 | Steps:   918,052 | Games:  5120 | R/B/D: 1112/268/3740 | Len: 165.2 | PL: -0.0854 | VL: 0.0325 | Ent: 2.091 | FPS: 244
+  >> Eval vs Random: 11W / 1L / 8D  (win rate: 55%)
+Batch   85 | Steps:   969,111 | Games:  5440 | R/B/D: 1231/275/3934 | Len: 159.6 | PL: -0.0163 | VL: 0.0248 | Ent: 2.120 | FPS: 244
+Batch   90 | Steps: 1,014,345 | Games:  5760 | R/B/D: 1397/283/4080 | Len: 141.4 | PL: -0.0154 | VL: 0.0372 | Ent: 1.966 | FPS: 245
+Batch   95 | Steps: 1,058,415 | Games:  6080 | R/B/D: 1571/291/4218 | Len: 137.7 | PL: -0.0973 | VL: 0.0401 | Ent: 1.874 | FPS: 245
+Batch  100 | Steps: 1,096,860 | Games:  6400 | R/B/D: 1772/296/4332 | Len: 120.1 | PL: -0.0850 | VL: 0.0515 | Ent: 1.739 | FPS: 245
+  >> Eval vs Random: 18W / 0L / 2D  (win rate: 90%)
+Batch  105 | Steps: 1,133,267 | Games:  6720 | R/B/D: 1979/301/4440 | Len: 113.8 | PL: -0.0907 | VL: 0.0339 | Ent: 1.723 | FPS: 247
+Batch  110 | Steps: 1,173,347 | Games:  7040 | R/B/D: 2177/308/4555 | Len: 125.2 | PL: -0.2167 | VL: 0.0497 | Ent: 1.727 | FPS: 250
+Batch  115 | Steps: 1,215,827 | Games:  7360 | R/B/D: 2359/315/4686 | Len: 132.8 | PL: -0.0298 | VL: 0.0227 | Ent: 1.697 | FPS: 251
+Batch  120 | Steps: 1,262,036 | Games:  7680 | R/B/D: 2522/317/4841 | Len: 144.4 | PL: -0.0455 | VL: 0.0291 | Ent: 1.655 | FPS: 252
+  >> Eval vs Random: 17W / 0L / 3D  (win rate: 85%)
+Batch  125 | Steps: 1,306,064 | Games:  8000 | R/B/D: 2696/320/4984 | Len: 137.6 | PL: 0.1741 | VL: 0.0331 | Ent: 1.451 | FPS: 253
+Batch  130 | Steps: 1,349,354 | Games:  8320 | R/B/D: 2870/328/5122 | Len: 135.3 | PL: 0.0185 | VL: 0.0441 | Ent: 1.751 | FPS: 255
+Batch  135 | Steps: 1,394,100 | Games:  8640 | R/B/D: 3050/338/5252 | Len: 139.8 | PL: -0.0607 | VL: 0.0410 | Ent: 1.547 | FPS: 257
+Batch  140 | Steps: 1,440,736 | Games:  8960 | R/B/D: 3198/343/5419 | Len: 145.7 | PL: -0.0157 | VL: 0.0307 | Ent: 1.500 | FPS: 258
+  >> Eval vs Random: 11W / 2L / 7D  (win rate: 55%)
+Batch  145 | Steps: 1,491,093 | Games:  9280 | R/B/D: 3321/352/5607 | Len: 157.4 | PL: -0.0140 | VL: 0.0254 | Ent: 1.559 | FPS: 260
+Batch  150 | Steps: 1,547,695 | Games:  9600 | R/B/D: 3395/357/5848 | Len: 176.9 | PL: -0.0484 | VL: 0.0123 | Ent: 1.563 | FPS: 262
+Batch  155 | Steps: 1,601,173 | Games:  9920 | R/B/D: 3501/361/6058 | Len: 167.1 | PL: 0.0192 | VL: 0.0243 | Ent: 1.427 | FPS: 263
+Batch  160 | Steps: 1,651,178 | Games: 10240 | R/B/D: 3626/377/6237 | Len: 156.3 | PL: -0.0908 | VL: 0.0326 | Ent: 1.443 | FPS: 263
+  >> Eval vs Random: 14W / 0L / 6D  (win rate: 70%)
+Batch  165 | Steps: 1,704,464 | Games: 10560 | R/B/D: 3722/387/6451 | Len: 166.5 | PL: -0.1003 | VL: 0.0241 | Ent: 1.415 | FPS: 265
+Batch  170 | Steps: 1,757,699 | Games: 10880 | R/B/D: 3821/396/6663 | Len: 166.4 | PL: 0.0244 | VL: 0.0135 | Ent: 1.414 | FPS: 267
+Batch  175 | Steps: 1,811,017 | Games: 11200 | R/B/D: 3913/402/6885 | Len: 166.6 | PL: 0.0074 | VL: 0.0165 | Ent: 1.209 | FPS: 268
+Batch  180 | Steps: 1,865,865 | Games: 11520 | R/B/D: 3987/414/7119 | Len: 171.4 | PL: -0.1403 | VL: 0.0194 | Ent: 1.477 | FPS: 269
+  >> Eval vs Random: 15W / 0L / 5D  (win rate: 75%)
+Batch  185 | Steps: 1,922,004 | Games: 11840 | R/B/D: 4064/421/7355 | Len: 175.4 | PL: -0.0163 | VL: 0.0112 | Ent: 1.646 | FPS: 271
+Batch  190 | Steps: 1,976,108 | Games: 12160 | R/B/D: 4156/425/7579 | Len: 169.1 | PL: 0.1176 | VL: 0.0418 | Ent: 1.885 | FPS: 273
+Batch  195 | Steps: 2,027,797 | Games: 12480 | R/B/D: 4255/436/7789 | Len: 161.5 | PL: -0.0513 | VL: 0.0222 | Ent: 1.586 | FPS: 275
+Batch  200 | Steps: 2,081,461 | Games: 12800 | R/B/D: 4345/446/8009 | Len: 167.7 | PL: -0.0270 | VL: 0.0209 | Ent: 1.846 | FPS: 277
+  >> Eval vs Random: 17W / 0L / 3D  (win rate: 85%)
+Batch  205 | Steps: 2,134,112 | Games: 13120 | R/B/D: 4438/457/8225 | Len: 164.5 | PL: 0.0981 | VL: 0.0205 | Ent: 1.495 | FPS: 277
+Batch  210 | Steps: 2,182,746 | Games: 13440 | R/B/D: 4568/467/8405 | Len: 152.0 | PL: -0.0207 | VL: 0.0290 | Ent: 1.626 | FPS: 277
+Batch  215 | Steps: 2,231,250 | Games: 13760 | R/B/D: 4702/473/8585 | Len: 151.6 | PL: 0.0835 | VL: 0.0214 | Ent: 1.597 | FPS: 277
+Batch  220 | Steps: 2,282,405 | Games: 14080 | R/B/D: 4821/481/8778 | Len: 159.9 | PL: -0.0223 | VL: 0.0313 | Ent: 1.673 | FPS: 276
+  >> Eval vs Random: 18W / 0L / 2D  (win rate: 90%)
+Batch  225 | Steps: 2,328,977 | Games: 14400 | R/B/D: 4975/491/8934 | Len: 145.5 | PL: -0.0237 | VL: 0.0377 | Ent: 1.624 | FPS: 276
+Batch  230 | Steps: 2,377,319 | Games: 14720 | R/B/D: 5115/501/9104 | Len: 151.1 | PL: 0.0121 | VL: 0.0237 | Ent: 1.601 | FPS: 276
+Batch  235 | Steps: 2,428,984 | Games: 15040 | R/B/D: 5232/513/9295 | Len: 161.5 | PL: 0.0446 | VL: 0.0294 | Ent: 1.779 | FPS: 277
+Batch  240 | Steps: 2,477,253 | Games: 15360 | R/B/D: 5383/532/9445 | Len: 150.8 | PL: 0.0716 | VL: 0.0361 | Ent: 1.798 | FPS: 279
+  >> Eval vs Random: 18W / 0L / 2D  (win rate: 90%)
+Batch  245 | Steps: 2,529,479 | Games: 15680 | R/B/D: 5499/547/9634 | Len: 163.2 | PL: -0.0044 | VL: 0.0369 | Ent: 1.680 | FPS: 281
+Batch  250 | Steps: 2,582,503 | Games: 16000 | R/B/D: 5595/567/9838 | Len: 165.7 | PL: 0.0209 | VL: 0.0160 | Ent: 2.131 | FPS: 282
+Batch  255 | Steps: 2,640,955 | Games: 16320 | R/B/D: 5645/592/10083 | Len: 182.7 | PL: 0.0018 | VL: 0.0154 | Ent: 2.200 | FPS: 283
+Batch  260 | Steps: 2,698,497 | Games: 16640 | R/B/D: 5693/625/10322 | Len: 179.8 | PL: -0.0091 | VL: 0.0141 | Ent: 2.162 | FPS: 283
+  >> Eval vs Random: 10W / 2L / 8D  (win rate: 50%)
+Batch  265 | Steps: 2,755,711 | Games: 16960 | R/B/D: 5743/666/10551 | Len: 178.8 | PL: -0.0556 | VL: 0.0157 | Ent: 1.980 | FPS: 283
+Batch  270 | Steps: 2,810,995 | Games: 17280 | R/B/D: 5815/686/10779 | Len: 172.8 | PL: -0.0215 | VL: 0.0176 | Ent: 1.884 | FPS: 283
+Batch  275 | Steps: 2,868,027 | Games: 17600 | R/B/D: 5875/711/11014 | Len: 178.2 | PL: -0.0217 | VL: 0.0124 | Ent: 1.751 | FPS: 283
+Batch  280 | Steps: 2,924,806 | Games: 17920 | R/B/D: 5932/725/11263 | Len: 177.4 | PL: -0.0246 | VL: 0.0189 | Ent: 1.871 | FPS: 283
+  >> Eval vs Random: 10W / 0L / 10D  (win rate: 50%)
+Batch  285 | Steps: 2,980,742 | Games: 18240 | R/B/D: 6014/737/11489 | Len: 174.8 | PL: -0.0250 | VL: 0.0238 | Ent: 1.728 | FPS: 283
+
+Training complete!
+Total steps: 3,004,179
+Total games: 18,368
+Results: R=6033 B=741 D=0 T=11594
+Best win rate vs random: 90%
+Time: 176.7 min (2.9 hrs)
+Avg FPS: 283

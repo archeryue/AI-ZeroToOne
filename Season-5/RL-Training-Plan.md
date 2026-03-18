@@ -98,12 +98,71 @@ Hands-on RL training journey: from DQN basics to PPO mastery, using LunarLander 
 - Experience with CNN feature extraction
 - Understanding of training dynamics and debugging RL
 
-**Steps:**
-1. Build or finalize the Chinese Chess environment (already started in `ChineseChess/`)
-2. Start with supervised learning on existing game databases
-3. Implement MCTS (Monte Carlo Tree Search)
-4. Combine neural network + MCTS (AlphaZero approach)
-5. Self-play training loop
+### Stage 1: Gymnasium Env Wrapper [DONE]
+- Observation: (15, 10, 9) tensor — 14 piece planes + 1 turn plane
+- Action space: Discrete(8100) with legal move masking
+- Wraps existing ChineseChess game engine
+
+### Stage 2: PPO Self-Play (Local — RTX 5060 Ti)
+
+**Model:** CNN Actor-Critic
+- 3-layer CNN (15→64→128→128) + FC(11520→512) + actor(8100) + critic(1)
+- ~10.3M params, ~39 MB
+- GPU memory: ~130 MB (batch=64) — trivial for RTX 5060 Ti (16GB)
+
+**Training:**
+- Self-play: agent plays both Red and Black
+- Env speed: ~672 steps/sec (bottleneck is legal move generation)
+- With 8 parallel envs: ~3000-4000 steps/sec estimated
+- Target: 5-10M steps of self-play
+- **Estimated time: 1-3 hours on RTX 5060 Ti**
+- Expected strength: should beat RandomAI and GreedyAI, maybe weak MinimaxAI
+
+**Why PPO here:**
+- Reuses our existing PPO code from Phases 2/4
+- Good baseline before going to AlphaZero
+- Action masking straightforward with PPO (mask logits before softmax)
+
+### Stage 2 Results
+
+90% win rate vs random, but 0 wins vs Minimax depth-3 (0W/8L/2D in 10 games).
+Pure PPO lacks tactical depth — search (MCTS) is essential. See [ChessRL/README.md](ChessRL/README.md) for full analysis.
+
+### Stage 3: AlphaZero (Cloud — H100)
+
+**Model:** ResNet + dual heads (policy + value)
+- Option A: 10 res blocks, 128 channels — 26.3M params, 100 MB, ~430 MB GPU
+- Option B: 20 res blocks, 256 channels — 47.0M params, 179 MB, ~800 MB GPU
+- Recommend starting with Option A
+
+**Training:**
+- AlphaZero loop: self-play with MCTS → collect games → train network → repeat
+- Each self-play game needs ~200 MCTS simulations per move × ~100 moves = 20,000 NN forward passes per game
+- MCTS is sequential per move (hard to parallelize within a game)
+- Parallelism: run multiple self-play games concurrently
+
+**Compute estimate (Option A on H100):**
+
+| Component | Estimate |
+|---|---|
+| NN forward pass (H100) | ~0.05ms per batch of 1 |
+| MCTS sims per move | 200 |
+| Moves per game | ~100 |
+| NN evals per game | ~20,000 |
+| Time per game (1 thread) | ~2-3 sec |
+| Parallel games (H100 80GB) | 32-64 concurrent |
+| Games per hour | ~40,000-80,000 |
+| Target total games | 100,000-500,000 |
+| **Estimated training time** | **3-12 hours on H100** |
+| H100 cloud cost (~$3/hr) | **~$10-$36** |
+
+**Why H100 not RTX 5060 Ti:**
+- MCTS needs massive NN inference throughput (millions of forward passes)
+- H100 has ~3x memory bandwidth and ~4x compute vs 5060 Ti
+- 80GB VRAM allows larger batch sizes and more parallel games
+- On RTX 5060 Ti the same training would take ~12-48 hours
+
+**Expected strength:** Should beat MinimaxAI (depth 3-4), approach amateur human level
 
 ---
 
