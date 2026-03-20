@@ -1,0 +1,19 @@
+[engine] Using C++ engine
+=== Candidate 4 v5: AlphaZero with Curriculum ===
+Device: cuda
+Skipping pretrained weights (SKIP_PRETRAIN=1)
+Model: 5 res blocks, 64 channels, 1,868,539 params (7.5 MB)
+MCTS: 200 sims, 8 VL batch, c_puct=1.5
+Self-play: 16 parallel games, 200 max steps
+Training: 500 iters, 100 train steps/iter
+Curriculum: random → greedy → minimax → self_play, promote at 75%
+
+Skipping human buffer seeding (SKIP_PRETRAIN=1)
+Iter   1 [  random] | Games:    16 | R/B/D: 11/3/2 CM:3(19%)x3 | Len: 193 | PL: 2.9479 | VL: 0.0757 | Buf:   1541 | SP: 64s (14.9g/m) | Train: 1s | Elapsed: 66s
+Iter   2 [  random] | Games:    32 | R/B/D: 8/6/2 CM:2(12%)x3 | Len: 190 | PL: 2.5990 | VL: 0.0278 | Buf:   3177 | SP: 70s (13.7g/m) | Train: 1s | Elapsed: 137s
+Iter   3 [  random] | Games:    48 | R/B/D: 8/7/1 CM:1(6%)x4 | Len: 190 | PL: 2.0401 | VL: 0.0162 | Buf:   4746 | SP: 70s (13.7g/m) | Train: 1s | Elapsed: 208s
+Iter   4 [  random] | Games:    64 | R/B/D: 9/7/0 CM:1(6%)x5 | Len: 194 | PL: 1.6951 | VL: 0.0246 | Buf:   6458 | SP: 74s (12.9g/m) | Train: 1s | Elapsed: 283s
+Iter   5 [  random] | Games:    80 | R/B/D: 6/9/1 CM:0(0%)x6 | Len: 200 | PL: 1.5343 | VL: 0.0154 | Buf:   8058 | SP: 73s (13.1g/m) | Train: 1s | Elapsed: 358s
+Iter   6 [  random] | Games:    96 | R/B/D: 8/5/3 CM:1(6%)x6 | Len: 197 | PL: 1.3641 | VL: 0.0215 | Buf:   9933 | SP: 75s (12.8g/m) | Train: 1s | Elapsed: 434s
+Iter   7 [  random] | Games:   112 | R/B/D: 4/9/3 CM:1(6%)x6 | Len: 190 | PL: 1.2677 | VL: 0.0152 | Buf:  11528 | SP: 77s (12.5g/m) | Train: 1s | Elapsed: 511s
+Iter   8 [  random] | Games:   128 | R/B/D: 9/7/0 CM:3(19%)x5 | Len: 186 | PL: 1.2002 | VL: 0.0268 | Buf:  13787 | SP: 77s (12.4g/m) | Train: 1s | Elapsed: 589s

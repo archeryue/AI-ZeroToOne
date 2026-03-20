@@ -486,16 +486,50 @@ Ran comprehensive diagnostics comparing the peak model (iter 50, 70%) vs degrade
 
 **Log**: `training/candidate4_v3_nopretrain_output.log`
 
-### Candidate 4 v4 (step penalty): IN PROGRESS
+### Candidate 4 v4 (step penalty): ABANDONED
 
-**Key change from v3:** Replace half-reward for step_limit wins with a continuous per-step penalty:
-- Steps 1-100: no penalty
-- Steps 101-200: -0.001 per step, accumulating
-- At step 200: total penalty = -0.1 for BOTH sides, regardless of outcome
+**Experiments tried (all failed to produce decisive games):**
 
-**Goal:** Directly penalize the shuffling/stalling behavior that causes degradation. Unlike half-reward (which only affects step_limit wins), this penalty applies to ALL games that go long.
+1. **Step penalty only, no material adjudication**: -0.001/step after step 100, accumulating to -0.1 at step 200. Result: 0/0/16 draws every iteration. Without material adjudication, all 200-step games are draws → zero signal.
+
+2. **Material adjudication (0.5) + strong step penalty (-0.5 at 200)**: Material adj wins get +0.5 reward, step penalty -0.005/step. At step 200: winner gets +0.5-0.5=**0.0 net reward**, loser gets -0.5-0.5=-1.0. Problem: winning by material at step limit gives zero positive signal. The model can't learn because the only way to get positive reward is checkmate, but it doesn't know how to checkmate yet.
+
+**Key insight**: Material adjudication + step penalty cancel each other out at step 200. The model needs positive reward signal from material wins to bootstrap learning toward checkmate. This led to v5's curriculum approach.
 
 **Log**: `training/candidate4_v4_output.log`
+
+### Candidate 4 v5 (curriculum): IN PROGRESS
+
+**Major redesign** — instead of pure self-play, use curriculum training with progressively stronger opponents:
+
+**Curriculum phases**: Random → Greedy → Minimax (depth 2) → Self-play. Promote when eval score ≥ 75% vs current opponent.
+
+**Key features:**
+- **Curriculum opponents**: Greedy (1-ply material lookahead) and Minimax (alpha-beta depth 2) implemented using C++ engine primitives
+- **Agent plays both sides**: Half Red, half Black per batch — eliminates color bias
+- **Only agent MCTS positions** stored as training examples (opponent moves have no policy targets)
+- **Check bonus (+0.15)**: MCTS leaf evaluation penalizes positions where current player is in check, guiding search toward checking sequences and checkmate
+- **Endgame starting positions (25%)**: Games randomly start from mid/endgame positions (40-80 random moves played first), exposing model to positions where checkmate is achievable
+- **Higher material adjudication threshold (0.3)**: Need ~Horse/Cannon advantage to win by adjudication, forcing more actual checkmates
+- **Checkmate boost**: Rare checkmate games upweighted in replay buffer (up to 10x when checkmate rate < 5%, scaling down as rate increases)
+- **Step penalty**: -0.005/step after step 100, -0.5 at step 200 for both sides
+- **Half reward (0.5)** for material adjudication wins
+- **200 MCTS sims for eval** (was 50) — matches training strength
+
+**Training Config:**
+
+| Param | Value |
+|---|---|
+| MCTS sims | 200 (train and eval) |
+| Parallel games | 16 |
+| Replay buffer | 20,000 |
+| Train steps/iter | 100 |
+| Eval every | 10 iterations |
+| Total iterations | 500 |
+| Curriculum | random → greedy → minimax → self_play |
+| Promote threshold | 75% score |
+
+**Log**: `training/candidate4_v5_output.log`
 
 ---
 
@@ -556,7 +590,8 @@ Parameters: ~26.3M
 | 4v1. AlphaZero (all draws) | 0W/2L/8D (40%) | — | — |
 | 4v2. AlphaZero (move ban) | 3W/6L/1D→0W/10L (35%→0%) | — | — |
 | 4v3. AlphaZero (no-pretrain) | Peak 70%→30% | — | — |
-| 4v4. AlphaZero (step penalty) | In progress | — | — |
+| 4v4. AlphaZero (step penalty) | Abandoned (zero signal) | — | — |
+| 4v5. AlphaZero (curriculum) | In progress | — | — |
 | 5. Full AlphaZero | — | — | — |
 
 ---
@@ -648,4 +683,5 @@ Parameters: ~26.3M
 | 2026-03-19 | Candidate 4 v2 analysis | Two separate problems: (1) draw deadlock = solved, (2) MCTS policy targets worse than pretrained policy at small scale |
 | 2026-03-19 | Candidate 4 v3: No-pretrain, 200 sims, 20K buffer, 100 train steps | Peak 70% vs Random at iter 50 — best AlphaZero result |
 | 2026-03-19 | Candidate 4 v3 degradation investigation | Iter 50 has diverse strategy; iter 166 memorized ONE trick (Cannon captures Horse) then shuffles forever. Self-play overfitting. |
-| 2026-03-20 | Candidate 4 v4: Step penalty (-0.001/step after step 100) | In progress — penalizes stalling/shuffling behavior |
+| 2026-03-20 | Candidate 4 v4: Step penalty experiments | Abandoned — step penalty + material adj cancel out, zero positive signal for model |
+| 2026-03-20 | Candidate 4 v5: Curriculum (random→greedy→minimax→self-play) | In progress — check bonus, endgame starts, checkmate boost, higher adj threshold |
