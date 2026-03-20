@@ -219,14 +219,29 @@ def main():
     optimizer = Adam(network.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
 
-    print(f"\nTraining for {NUM_EPOCHS} epochs, "
+    # Resume from checkpoint if available
+    start_epoch = 1
+    best_val_pl = float('inf')
+    checkpoint_path = os.path.join(SAVE_DIR, "pretrain_checkpoint.pt")
+    if os.path.exists(checkpoint_path):
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        network.load_state_dict(ckpt['model_state'])
+        optimizer.load_state_dict(ckpt['optimizer_state'])
+        start_epoch = ckpt['epoch'] + 1
+        best_val_pl = ckpt.get('val_pl', float('inf'))
+        # Advance scheduler to correct position
+        for _ in range(ckpt['epoch']):
+            scheduler.step()
+        print(f"Resumed from epoch {ckpt['epoch']} "
+              f"(val_pl={ckpt['val_pl']:.4f}, val_acc={ckpt['val_acc']:.1f}%)")
+
+    print(f"\nTraining epochs {start_epoch}-{start_epoch + NUM_EPOCHS - 1}, "
           f"batch_size={BATCH_SIZE}, lr={LR}")
     print()
 
-    best_val_pl = float('inf')
     start_time = time.time()
 
-    for epoch in range(1, NUM_EPOCHS + 1):
+    for epoch in range(start_epoch, start_epoch + NUM_EPOCHS):
         epoch_start = time.time()
 
         # Train
@@ -262,7 +277,8 @@ def main():
         scheduler.step()
         epoch_time = time.time() - epoch_start
 
-        print(f"\nEpoch {epoch}/{NUM_EPOCHS} ({epoch_time:.0f}s) | "
+        end_epoch = start_epoch + NUM_EPOCHS - 1
+        print(f"\nEpoch {epoch}/{end_epoch} ({epoch_time:.0f}s) | "
               f"Train PL: {train_pl:.4f} VL: {train_vl:.4f} Acc: {train_acc:.1f}% | "
               f"Val PL: {val_pl:.4f} VL: {val_vl:.4f} Acc: {val_acc:.1f}%")
 

@@ -1,11 +1,11 @@
 # ChessRL AlphaZero Project — Handoff Document
-**Date: 2026-03-18**
+**Date: 2026-03-19**
 
 ## 1. Project Overview
 
 Training an AlphaZero agent for **Chinese Chess (Xiangqi)** from scratch. Season 5 of user's AI/ML learning journey (Reinforcement Learning focus).
 
-**Current phase**: Supervised pre-training on human games to bootstrap the policy network, then continue with AlphaZero self-play.
+**Current phase**: Candidate 4 v2 — AlphaZero self-play with move banning + material adjudication to solve the draw problem.
 
 ## 2. Key Architecture
 
@@ -23,18 +23,11 @@ Training an AlphaZero agent for **Chinese Chess (Xiangqi)** from scratch. Season
 - **IMPORTANT**: Must `import engine_c` BEFORE adding ChessRL to `sys.path`, otherwise the local `engine_c/` directory shadows the installed package
 - Installed in `/home/start-up/torch/` venv
 - Key exports: `Board`, `Game`, `get_legal_moves`, `get_legal_action_indices`, `board_to_observation`, `get_action_mask`, `simulate_action`, `encode_move`, `decode_action`
-- Correctness: 100/100 random games match Python engine (tested in `test_engine.py`)
-- Performance benchmarks:
-  - `get_legal_moves`: 160x faster
-  - `get_action_mask`: 647x faster
-  - `board_to_observation`: 20x faster
-  - Full random game: 234x faster
 
 ### MCTS: `agents/alphazero/mcts.py`
 - `MCTS` class: standard single-game search (used for evaluation)
 - `batched_mcts_search()`: virtual loss + leaf batching for parallel self-play
 - Auto-detects C++ engine via `_USE_CPP` flag
-- Helper functions `_get_obs()`, `_get_mask()`, `_simulate()`, `_get_legal_actions()`, `_is_playing()`, `_get_terminal_value()` route to C++ or Python
 
 ### Python Engine (reference, slow):
 - `ChineseChess/backend/engine/` — Board, Game, Rules, Pieces
@@ -44,114 +37,106 @@ Training an AlphaZero agent for **Chinese Chess (Xiangqi)** from scratch. Season
 ## 3. Training Data
 
 ### Human Games Dataset
-- **Source**: `data/community-xiangqi-games-database/` (cloned from GitHub: chasoft/community-xiangqi-games-database)
-- **Format**: DhtmlXQ format files (Chinese chess web notation)
-- **Raw files**: 191,234 game files (104,950 tournament, 9,573 selected, rest puzzles/openings)
-- **Parsed**: 162,228 games successfully parsed → **11,025,186 training positions**
-- **Results distribution**: 76,118 red wins, 39,219 black wins, 46,891 draws (27,932 unknown skipped)
-- **Storage**: 23 compressed shards at `data/supervised_training_data_shard{000-022}.npz` (65.2 MB total)
-- **Shard format**: Each `.npz` contains:
-  - `boards`: (N, 90) int8 — flat board state
-  - `actions`: (N,) int32 — action index (encode_move result)
-  - `values`: (N,) float32 — game outcome from current player's perspective (+1/-1/0)
-  - `turns`: (N,) int8 — current player (1=Red, -1=Black)
-- **Manifest**: `data/supervised_training_data_manifest.txt`
-- **Parser**: `training/parse_games.py` — parses DhtmlXQ files, saves shards
+- **Source**: `data/community-xiangqi-games-database/`
+- **Parsed**: 162,228 games → **11,025,186 training positions** in 23 shards (65.2 MB)
+- **Shard format**: Each `.npz` contains boards (N,90) int8, actions (N,) int32, values (N,) float32, turns (N,) int8
+- **Parser**: `training/parse_games.py`
 
-## 4. Current Status: Supervised Pre-training Running
+## 4. Current Status & Experiment History
 
-### Script: `training/pretrain_supervised.py`
-- **Running as PID 2931348** (torch venv)
-- **Log**: `training/pretrain_output.log`
-- **Config**: 5 epochs, batch_size=1024, lr=1e-3, CosineAnnealingLR
-- **Progress at last check**: Epoch 1, batch 8800/10718 (~82% through epoch 1)
-  - Policy loss: 3.27 (down from 9.0 at start)
-  - Value loss: 0.575
-  - Train accuracy: 23.8% (move prediction)
-- **Note**: `C++ engine: False` in the log — the pre-training is running WITHOUT C++ engine for `board_to_observation` (falls back to Python). This is because the script was launched from `/tmp` but imports happen after path setup. The C++ engine import fails due to shadowing. This makes training slower but still works correctly.
-- **Saves to**: `training/candidate4/az_pretrained.pt` (best val loss) and `training/candidate4/pretrain_checkpoint.pt`
+### Supervised Pre-training: COMPLETED
+- **Best result**: Epoch 7, val_pl=2.4873, val_acc=34.6% move prediction
+- **Saved**: `training/candidate4/az_pretrained.pt`
 
-### What to do after pre-training completes:
-1. Load `az_pretrained.pt` weights into AlphaZero self-play training (`train_alphazero.py`)
-2. Resume self-play with the bootstrapped network — it should make meaningful moves from the start instead of random play
-3. The `train_alphazero.py` already has the single-process batched architecture (see section 5)
+### Candidate 4 v1: AlphaZero Self-Play (FAILED — all draws)
+- **Problem**: 99.5% of games ended in repetition draws → no value signal → policy degraded
+- **Techniques tried (all insufficient)**:
+  1. Repetition detection (3-fold → draw)
+  2. Material-blended MCTS (30% material eval in leaf values)
+  3. Material adjudication (draws with imbalance → win for stronger side)
+  4. Human-seeded replay buffer (20K positions)
+  5. Repetition penalty (-0.5 for both sides)
+- **Result**: 0W/2L/8D vs Random (40% score) — worse than all PPO candidates
+- **Root cause**: Chicken-and-egg deadlock. Equal networks → draws → no value signal → MCTS can't guide play → policy degrades → repeat
+
+### Candidate 4 v2: Move Banning + Material Adjudication (CURRENT)
+- **Two simple rules that broke the deadlock**:
+  1. **Ban repeated moves**: If position seen 2+ times, mask out the move that leads to it (forces progress)
+  2. **Material adjudication at step 200**: Side with more material wins (no more draws from step limit)
+- **Result**: 93% decisive self-play games (was 0.5% in v1!)
+- **Issue found**: Policy still degrades during training (PL: 0.3→2.7, eval: 35%→0% vs Random over 75 iters). The pretrained policy is destroyed by MCTS policy targets from self-play.
+- **Log**: `training/candidate4_output.log`
+
+### Candidate 4 v3 (no-pretrain): Smaller Buffer + More Train Steps
+- **Changes**: 200 MCTS sims, 20K buffer (was 100K), 100 train steps/iter (was 20), no pretrained weights, half reward for step_limit wins
+- **Result**: Peaked at **70% vs Random** at iter 50, then degraded to 30% by iter 166
+- **Diagnosis**: Model overfits to narrow self-play patterns. Iter50 has broad strategy (advance Soldiers, develop Chariots). Iter166 memorized ONE trick (Cannon captures Horse) then shuffles forever.
+- **Log**: `training/candidate4_v3_nopretrain_output.log`
+
+### Candidate 4 v4 (step penalty): CURRENT
+- **Changes from v3**: Replace half-reward for step_limit with per-step penalty after step 100 (-0.001/step, accumulating to -0.1 at step 200). Penalizes BOTH sides for long games regardless of outcome.
+- **Goal**: Discourage the shuffling/stalling behavior that causes degradation
+
+### Key Unsolved Problem: Policy Degradation
+Model learns useful strategies early but overfits to narrow self-play patterns during continued training.
+
+**Ideas to try next (in priority order)**:
+1. **Checkpoint pool / league training**: Instead of self-play against current self, maintain a pool of past checkpoints. Each game randomly samples an opponent from the pool. This prevents the model from overfitting to its own current strategy and forces it to generalize.
+2. **KL divergence penalty**: Add a KL(current_policy || reference_policy) term to the loss. The reference can be a snapshot from N iterations ago or the best checkpoint. This prevents the policy from drifting too far too fast, acting as a regularizer against catastrophic forgetting.
+3. **Expert iteration (ExIt)**: Use MCTS to improve human game positions instead of pure self-play
+4. **Mixed training**: Continuously mix human data into replay buffer (not just at start)
+5. **Larger model**: 1.9M params may be too small for both policy and value
 
 ## 5. Training Script: `training/train_alphazero.py`
 
 ### Architecture: Single-process batched multi-game MCTS
-- **NOT multiprocessing** — previous multi-process design had 98.5% time wasted on queue serialization
 - Runs N_PARALLEL (16) games simultaneously in one process
-- All MCTS leaves from all games batched into ONE GPU forward pass (avg batch size ~230)
-- Zero serialization overhead, maximum GPU utilization
+- All MCTS leaves from all games batched into ONE GPU forward pass (avg batch ~230)
+- Zero serialization overhead
 
 ### Key hyperparameters:
 ```
 NUM_BLOCKS = 5, CHANNELS = 64
-NUM_SIMULATIONS = 200 (deep search, enabled by C++ engine)
-VIRTUAL_LOSS_N = 16
-C_PUCT = 1.5
-N_PARALLEL = 16 (games running simultaneously)
-MAX_GAME_STEPS = 200
-GAMES_PER_ITER = 16
-NUM_ITERATIONS = 300
-TRAIN_STEPS_PER_ITER = 100
-BATCH_SIZE = 256, LR = 2e-3
+NUM_SIMULATIONS = 50
+VIRTUAL_LOSS_N = 8, C_PUCT = 1.5, TEMP_THRESHOLD = 30
+N_PARALLEL = 16, MAX_GAME_STEPS = 200
+TRAIN_STEPS_PER_ITER = 20, BATCH_SIZE = 256, LR = 5e-4
 REPLAY_BUFFER_SIZE = 100,000
+MATERIAL_BLEND = 0.3 (blended into MCTS leaf values)
 ```
 
-### Performance (measured):
-- ~10 games/min at 200 sims (with C++ engine)
-- Avg GPU batch size: 230
-- ~95s per iteration (16 games)
+### Key features in current code:
+- **Move banning**: After MCTS search, masks out moves leading to 3rd repetition of a position
+- **Material adjudication**: At step limit, side with more material wins
+- **Human-seeded buffer**: 20K positions from supervised data loaded at start
+- **Material-blended MCTS**: 30% material eval in leaf values for tactical guidance
 
-### To add pretrained weight loading:
-In `main()`, after creating the network, add:
-```python
-pretrained_path = os.path.join(SAVE_DIR, "az_pretrained.pt")
-if os.path.exists(pretrained_path):
-    network.load_state_dict(torch.load(pretrained_path, map_location=device))
-    print(f"Loaded pretrained weights from {pretrained_path}")
+### Launch command:
+```bash
+cd /tmp && source /home/start-up/torch/bin/activate
+nohup python -u -c "
+import engine_c
+import sys
+sys.path.insert(0, '/home/start-up/AI-ZeroToOne/Season-5/ChessRL')
+from training.train_alphazero import main
+main()
+" > /home/start-up/AI-ZeroToOne/Season-5/ChessRL/training/candidate4_output.log 2>&1 &
 ```
 
-## 6. Previous Experiments (Candidates 1-3)
+## 6. Environment Setup
 
-All used PPO (not AlphaZero). Results documented in `training/candidate2/`, `candidate2_v2/`, `candidate3/`, `candidate3_v2/`. Key insight: PPO alone couldn't learn chess — switched to AlphaZero with MCTS.
-
-### Candidate 4 (killed runs):
-1. **Multi-process Python engine, 50 sims**: ~21 games/min, all draws, no learning (GPU 10%, CPU bottleneck)
-2. **Multi-process C++ engine, 200 sims**: 3.4 games/min — SLOWER because 98.5% time wasted on queue serialization between processes
-3. **Single-process C++ engine, 200 sims**: ~10 games/min, avg batch 230 — much better, but still all draws after 215 iterations (no value signal)
-
-**Root cause of all-draws**: The network starts random → plays randomly → always hits 200-step limit → value head learns nothing → policy head has no gradient signal. This is why supervised pre-training is needed to bootstrap.
-
-## 7. Environment Setup
-
-- **Python venv**: `/home/start-up/torch/` (Python 3.12, PyTorch 2.7.1+cu128, CUDA available)
-- **Packages needed**: torch, numpy, gymnasium, pybind11, engine_c (pip install from engine_c/)
+- **Python venv**: `/home/start-up/torch/` (Python 3.12, PyTorch 2.7.1+cu128)
 - **GPU**: NVIDIA GPU with 16GB VRAM
 - **RAM**: 15.5 GB total
+- **Rebuild C++ engine**: `cd engine_c && pip install .`
 
-### To run training:
-```bash
-source /home/start-up/torch/bin/activate
-cd /home/start-up/AI-ZeroToOne/Season-5/ChessRL
-python -u training/train_alphazero.py > training/candidate4_output.log 2>&1 &
-```
-
-### To rebuild C++ engine (if modified):
-```bash
-source /home/start-up/torch/bin/activate
-cd /home/start-up/AI-ZeroToOne/Season-5/ChessRL/engine_c
-pip install .
-```
-
-## 8. Critical User Preferences (from memory)
+## 7. Critical User Preferences (from memory)
 
 1. **NEVER delete checkpoints, .pt files, or training artifacts** without explicit permission
 2. **MUST discuss with user before changing** training algorithm, model structure, or key hyperparameters
 3. **Always analyze** model size, data size, compute needs, and training time before starting any training run
 
-## 9. File Tree (key files only)
+## 8. File Tree (key files only)
 
 ```
 Season-5/ChessRL/
@@ -161,8 +146,7 @@ Season-5/ChessRL/
 ├── engine_c/
 │   ├── xiangqi.h/cpp        # C++ game engine (234x speedup)
 │   ├── bindings.cpp          # pybind11 bindings
-│   ├── setup.py              # Build script
-│   └── test_engine.py        # Correctness + benchmark tests
+│   └── setup.py              # Build script
 ├── env/
 │   ├── observation.py        # board_to_observation (Python)
 │   ├── action_space.py       # encode_move, decode_action, get_action_mask
@@ -172,16 +156,19 @@ Season-5/ChessRL/
 │   ├── pretrain_supervised.py # Supervised pre-training on human games
 │   ├── parse_games.py        # DhtmlXQ parser → sharded training data
 │   ├── candidate4/           # Checkpoints (az_checkpoint.pt, az_pretrained.pt)
-│   └── pretrain_output.log   # Current pre-training log
+│   └── candidate4_output.log # Training log
 ├── data/
-│   ├── community-xiangqi-games-database/  # Raw DhtmlXQ game files (191K)
-│   ├── supervised_training_data_shard*.npz  # 23 shards, 11M positions
-│   └── supervised_training_data_manifest.txt
+│   ├── community-xiangqi-games-database/  # Raw game files (191K)
+│   └── supervised_training_data_shard*.npz  # 23 shards, 11M positions
+└── README.md                 # Full experiment results for Candidates 1-4
 ```
 
-## 10. Next Steps
+## 9. Summary of All Candidates
 
-1. **Wait for supervised pre-training to finish** (5 epochs on 11M positions)
-2. **Load pretrained weights** into `train_alphazero.py` and start self-play
-3. **Monitor**: With bootstrapped policy, games should show real moves instead of random wandering → decisive outcomes → value head learns → positive feedback loop
-4. **Future optimization**: If CPU-side Python MCTS becomes bottleneck again, consider implementing MCTS tree traversal in C++ too
+| Candidate | vs Random | Key Finding |
+|---|---|---|
+| 1. PPO Self-Play | 65% | Sparse reward can't teach chess |
+| 2. PPO + Reward Shaping | 51-66% | Bad reward scales hurt; balanced helps marginally |
+| 3. PPO + Curriculum | 75-84% | Best PPO result, but 0% vs Minimax |
+| 4v1. AlphaZero (all draws) | 40% | Self-play deadlock: no decisive games → no learning |
+| 4v2. AlphaZero (move ban) | 35%→0% | Decisive games achieved but policy degrades during training |

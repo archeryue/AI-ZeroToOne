@@ -1,0 +1,27 @@
+[engine] Using C++ engine
+=== Candidate 4: Mini AlphaZero (Single-Process Batched) ===
+Device: cuda
+Loaded pretrained weights from /home/start-up/AI-ZeroToOne/Season-5/ChessRL/training/candidate4_v3/az_pretrained.pt
+Model: 5 res blocks, 64 channels, 1,868,539 params (7.5 MB)
+MCTS: 200 sims, 8 VL batch, c_puct=1.5
+Self-play: 16 parallel games, 200 max steps, 16 games/iter
+Training: 300 iters, 20 train steps/iter
+
+Loaded 20000 human positions from supervised_training_data_shard013.npz
+Replay buffer seeded with 20000 human positions
+Iter   1 | Games:    16 | R/B/D: 12/4/0 | Len: 200 | PL: 0.3800 | VL: 0.5200 | Buf:  23200 | SP: 107s (8.9g/m) | Train: 1s | Elapsed: 108s
+Iter   2 | Games:    32 | R/B/D: 14/2/0 | Len: 200 | PL: 0.6110 | VL: 0.4410 | Buf:  26400 | SP: 122s (7.9g/m) | Train: 0s | Elapsed: 231s
+Iter   3 | Games:    48 | R/B/D: 9/7/0 | Len: 193 | PL: 0.8810 | VL: 0.4173 | Buf:  29481 | SP: 128s (7.5g/m) | Train: 0s | Elapsed: 359s
+Iter   4 | Games:    64 | R/B/D: 10/6/0 | Len: 199 | PL: 1.0721 | VL: 0.3766 | Buf:  32658 | SP: 124s (7.7g/m) | Train: 0s | Elapsed: 484s
+Iter   5 | Games:    80 | R/B/D: 9/7/0 | Len: 200 | PL: 1.2132 | VL: 0.3520 | Buf:  35858 | SP: 130s (7.4g/m) | Train: 0s | Elapsed: 614s
+Iter   6 | Games:    96 | R/B/D: 11/5/0 | Len: 200 | PL: 1.3305 | VL: 0.3148 | Buf:  39058 | SP: 128s (7.5g/m) | Train: 0s | Elapsed: 742s
+Iter   7 | Games:   112 | R/B/D: 8/5/3(D=3) | Len: 200 | PL: 1.4564 | VL: 0.2796 | Buf:  42258 | SP: 131s (7.3g/m) | Train: 0s | Elapsed: 874s
+Iter   8 | Games:   128 | R/B/D: 9/6/1(D=1) | Len: 200 | PL: 1.5750 | VL: 0.2621 | Buf:  45458 | SP: 131s (7.4g/m) | Train: 0s | Elapsed: 1005s
+Iter   9 | Games:   144 | R/B/D: 8/8/0 | Len: 200 | PL: 1.6869 | VL: 0.2483 | Buf:  48658 | SP: 128s (7.5g/m) | Train: 0s | Elapsed: 1134s
+Iter  10 | Games:   160 | R/B/D: 7/9/0 | Len: 200 | PL: 1.7063 | VL: 0.2412 | Buf:  51858 | SP: 134s (7.2g/m) | Train: 0s | Elapsed: 1268s
+Iter  11 | Games:   176 | R/B/D: 8/8/0 | Len: 200 | PL: 1.8293 | VL: 0.2381 | Buf:  55058 | SP: 133s (7.2g/m) | Train: 0s | Elapsed: 1402s
+Iter  12 | Games:   192 | R/B/D: 8/6/2(D=2) | Len: 200 | PL: 1.9107 | VL: 0.2143 | Buf:  58258 | SP: 133s (7.2g/m) | Train: 0s | Elapsed: 1535s
+Iter  13 | Games:   208 | R/B/D: 9/6/1(D=1) | Len: 200 | PL: 1.9578 | VL: 0.1998 | Buf:  61458 | SP: 131s (7.3g/m) | Train: 0s | Elapsed: 1667s
+Iter  14 | Games:   224 | R/B/D: 6/10/0 | Len: 200 | PL: 2.0074 | VL: 0.1967 | Buf:  64658 | SP: 134s (7.1g/m) | Train: 0s | Elapsed: 1801s
+Iter  15 | Games:   240 | R/B/D: 7/9/0 | Len: 200 | PL: 2.0499 | VL: 0.1872 | Buf:  67858 | SP: 136s (7.1g/m) | Train: 0s | Elapsed: 1938s
+Iter  16 | Games:   256 | R/B/D: 5/8/3(D=3) | Len: 200 | PL: 2.0916 | VL: 0.1798 | Buf:  71058 | SP: 138s (7.0g/m) | Train: 0s | Elapsed: 2076s

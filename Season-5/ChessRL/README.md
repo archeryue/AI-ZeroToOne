@@ -310,7 +310,7 @@ Retrained with same balanced rewards as Candidate 2 v2 (win=1.0, chariot=0.333, 
 
 ---
 
-## Candidate 4: Mini MCTS + NN (TODO)
+## Candidate 4: Mini AlphaZero ✅
 
 ### Idea
 
@@ -326,39 +326,176 @@ Input: (15, 10, 9)
   → Policy Head: Conv1x1 → FC → 8100 logits
   → Value Head:  Conv1x1 → FC → tanh → scalar
 
-Estimated params: ~3-5M
+Parameters: 1,868,539 (~1.9M, 7.5 MB)
 ```
 
-### MCTS Design
+### Infrastructure Built
 
-- **Simulations per move:** 50 (lightweight, fast on local GPU)
-- **Selection:** PUCT (Upper Confidence bound for Trees, guided by policy head)
-- **Expansion:** Use NN policy as prior probabilities
-- **Evaluation:** Use NN value head (no rollouts)
-- **Temperature:** 1.0 for first 30 moves (exploration), 0.1 after (exploitation)
+1. **C++ Game Engine (pybind11)**: 234x speedup over Python for game simulation. Uses make/unmake pattern with targeted check detection.
+2. **Single-process batched multi-game MCTS**: 16 games run simultaneously, all MCTS leaves batched into one GPU call (avg batch=230). Eliminates multiprocessing queue serialization that wasted 98.5% of time in the first implementation.
+3. **Supervised pre-training pipeline**: Parser for DhtmlXQ game format + sharded training data (11M positions from 162K human games, 65MB). Pre-trained policy to 34.6% move prediction accuracy.
 
-### Training Loop (AlphaZero-style)
+### Candidate 4 v1: AlphaZero Self-Play
 
-1. Play N self-play games using MCTS to select moves
-2. Collect (board_state, MCTS_policy, game_result) tuples
-3. Train network to predict MCTS policy (cross-entropy) and game result (MSE)
-4. Repeat
+**Training Config:**
 
-### Training Plan
+| Param | Value |
+|---|---|
+| MCTS sims per move | 50 |
+| Virtual loss batch | 8 |
+| c_puct | 1.5 |
+| Temperature threshold | 30 moves |
+| Parallel games | 16 |
+| Max game steps | 200 |
+| Learning rate | 5e-4 |
+| Train steps per iter | 20 |
+| Batch size | 256 |
+| Replay buffer | 100,000 |
+| Iterations | 300 (ran 212) |
 
-- 5 res blocks, 64 channels (~3-5M params)
-- 50 MCTS sims per move
-- ~100K-500K self-play games
-- Estimated: 4-8 hours on local GPU (bottleneck: MCTS inference)
-- Evaluate against Random, Greedy, Minimax (20 games each)
+**Techniques to combat the all-draws problem:**
+1. **Repetition detection**: 3-fold repetition → draw (ends games at ~55 steps instead of 200)
+2. **Material-blended MCTS**: 30% material eval blended into leaf values for tactical guidance
+3. **Material adjudication**: Draws with material imbalance (>1.5 points) treated as wins for stronger side
+4. **Human-seeded replay buffer**: 20K positions from human games loaded at start (provides value signal with known game outcomes)
+5. **Repetition penalty**: Equal-material repetition draws penalized (-0.5) for both sides
 
-### Benchmark vs Game AIs
+**Training Results (212 iterations, 3418 games, 63 min):**
 
-| Opponent | Mini-AZ Wins | Opponent Wins | Draws | Score |
+| Metric | Iter 1 | Iter 50 | Iter 100 | Iter 150 | Iter 200 |
+|---|---|---|---|---|---|
+| Policy Loss | 0.15 | 1.95 | 2.72 | 2.79 | 2.78 |
+| Value Loss | 0.53 | 0.17 | 0.13 | 0.11 | 0.10 |
+| Avg Game Length | 72 | 60 | 65 | 56 | 50 |
+| Throughput (g/m) | 62 | 56 | 69 | 65 | 66 |
+
+| Eval vs Random | Iter 25 | Iter 50 | Iter 75 | Iter 100 | Iter 125 | Iter 150 | Iter 175 | Iter 200 |
+|---|---|---|---|---|---|---|---|---|
+| Result | 0W/0L/10D | 0W/1L/9D | 0W/0L/10D | 0W/0L/10D | 0W/1L/9D | 0W/1L/9D | 0W/2L/8D | 0W/2L/8D |
+| Score | 50% | 45% | 50% | 50% | 45% | 45% | 40% | 40% |
+
+**Self-play decisive games:** 13 Red wins + 5 Black wins out of 3418 games total (**0.5% decisive rate**)
+
+### Analysis
+
+**What worked:**
+- **C++ engine + batched MCTS**: Throughput of 65 games/min with 50 MCTS sims (234x engine speedup + zero serialization overhead)
+- **Repetition detection**: Cut average game length from 200 to 55 steps, 3.6x throughput improvement
+- **Human-seeded replay buffer**: Gave value head real signal immediately (VL went from 0.53→0.10, showing learning)
+
+**What failed:**
+- **0 wins against random player** in evaluation — worse than every PPO candidate
+- **Policy loss increased** from 0.15→2.78 — the pretrained human-game policy was destroyed by MCTS self-play training, and nothing better replaced it
+- **Only 0.5% decisive self-play games** — 99.5% end in repetition draws despite all the countermeasures
+- **Material adjudication** decreased over time (adj went from ~12 to ~7 per 16 games) — the network learned to maintain material balance, reducing the signal
+- **Value head learned from human data but couldn't transfer** — it predicts values well on training data (VL=0.10) but can't guide MCTS to find checkmate sequences
+
+**Root cause diagnosis — Why self-play produces all draws:**
+
+The problem is a **chicken-and-egg deadlock**:
+
+1. Both sides use the **same network** → equally strong → no side can create advantage
+2. Equal play → games end in repetition → no decisive outcomes
+3. No decisive outcomes → value head learns constant values → flat position evaluation
+4. Flat evaluation → MCTS can't distinguish winning from losing positions
+5. MCTS without value guidance → poor policy targets → pretrained policy degrades
+6. Weaker policy → even less able to find winning moves → back to step 1
+
+This is fundamentally different from the original AlphaZero which used **5000 TPUs, 800 MCTS sims, 30M parameter network**, and millions of games. At our scale (1 GPU, 50 sims, 1.9M params), the system doesn't generate enough variance to bootstrap learning.
+
+### Candidate 4 v2: Move Banning + Material Adjudication
+
+**Key insight**: Instead of detecting repetition and declaring draw, **prevent repetition from happening** and **eliminate draws entirely**.
+
+Two simple rules:
+1. **Ban repeated moves**: If a position has been seen 2+ times, mask out the move that leads to it. Forces the agent to try new moves instead of shuffling.
+2. **Material adjudication at step 200**: If the game hits the step limit, the side with more material wins (not a draw).
+
+Same config as v1, plus human-seeded replay buffer (20K positions) and material-blended MCTS (30%).
+
+**Training Results (77 iterations, 1232 games, 45 min):**
+
+| Metric | Iter 1 | Iter 25 | Iter 50 | Iter 75 |
 |---|---|---|---|---|
-| Random | | | | |
-| Greedy | | | | |
-| Minimax (d=3) | | | | |
+| Policy Loss | 0.32 | 2.08 | 2.64 | 2.71 |
+| Value Loss | 0.56 | 0.23 | 0.15 | 0.15 |
+| R/B/D (per 16) | 12/3/1 | 10/5/1 | 10/4/2 | 10/4/2 |
+| Avg Game Length | 186 | 200 | 200 | 200 |
+| Throughput (g/m) | 38 | 30 | 29 | 29 |
+
+| Eval vs Random | Iter 25 | Iter 50 | Iter 75 |
+|---|---|---|---|
+| Result | 3W/6L/1D | 1W/8L/1D | 0W/10L/0D |
+| Score | 35% | 15% | 0% |
+
+**Self-play decisive rate: ~93%** (was 0.5% in v1) — the two rules completely solved the draw problem.
+
+### Analysis
+
+**What worked:**
+- **Move banning + material adjudication**: Completely eliminated the draw deadlock. 93% of self-play games are now decisive (12-13 Red wins + 3-5 Black wins per 16 games)
+- **Value head learning**: VL went from 0.56→0.15 with real win/loss signals — much stronger learning than v1
+- **Red/Black asymmetry visible**: Red wins ~75% of self-play games (first-move advantage), providing diverse value targets
+
+**What failed:**
+- **Policy degradation**: PL rose from 0.32→2.71 — the pretrained human policy was destroyed, same as v1
+- **Eval collapsed**: 35%→0% over 75 iterations — the network went from winning 3/10 to losing 10/10 against random
+- **MCTS policy targets from self-play are worse than pretrained policy**: Even though games are decisive, the MCTS search with a degrading value head produces poor move recommendations. Training on these targets destroys the pretrained knowledge faster than the network can learn from self-play outcomes
+
+**Root cause — Policy degradation despite decisive games:**
+
+The draw problem is solved, but a new problem is exposed: **the MCTS policy improvement loop doesn't work at small scale**. In AlphaZero, MCTS is supposed to produce better moves than the raw policy (because search looks ahead). But with only 50 sims and a 1.9M param network:
+1. The value head is too weak to guide search effectively
+2. MCTS with bad value estimates produces mediocre policy targets
+3. Training on these targets degrades the pretrained policy (which was trained on 11M human positions)
+4. Worse policy → even worse MCTS → accelerating degradation
+
+The pretrained policy at 34.6% accuracy is actually better than what MCTS can produce at this scale. The training loop is replacing good knowledge with bad knowledge.
+
+### Candidate 4 v3 (no-pretrain): Smaller Buffer + More Train Steps
+
+**Key changes from v2:**
+- 200 MCTS sims (was 50) — better policy targets from search
+- 20K replay buffer (was 100K) — more consistent training data
+- 100 train steps/iter (was 20) — actually learn from each batch
+- No pretrained weights — start from random initialization
+- Half reward (0.5) for step_limit wins — discourage passive play
+
+**Why no pretrain?** Testing showed pretrained weights get destroyed within ~10 iterations of self-play. The no-pretrain model actually performed better (50% at iter 25 vs 35% for pretrained v2).
+
+**Training Results (166 iterations, ~2660 games):**
+
+| Eval vs Random | Iter 25 | Iter 50 | Iter 75 | Iter 100 | Iter 125 | Iter 150 |
+|---|---|---|---|---|---|---|
+| Score | 55% | **70%** | 65% | 55% | 45% | 30% |
+
+- **Peak: 70% vs Random at iter 50** — best AlphaZero result, exceeds PPO Candidate 1 (65%)
+- Degraded to 30% by iter 166 — same pattern as v2, just slower
+
+**Deep Investigation — Why Degradation Happens:**
+
+Ran comprehensive diagnostics comparing the peak model (iter 50, 70%) vs degraded model (iter 166, 30%):
+
+1. **MCTS visit distribution is NOT the problem**: Even with near-uniform policy priors (96-97% entropy), 200 MCTS sims produce concentrated visit distributions (top move gets 40-60% of visits). Training targets are reasonably sharp (~33% top action probability).
+
+2. **The problem is self-play overfitting**:
+   - **Iter 50 model (70%)**: Has broad strategic understanding — advances Soldiers down the board, develops Chariots, actively captures pieces. Wins by material +19 in aggressive games.
+   - **Iter 166 model (30%)**: Memorized ONE trick — Cannon captures Horse opening (+0.40 material). Then gets STUCK shuffling Cannon back and forth (0,1)↔(1,1) for 20+ moves. Has 9 position repetitions per game vs 2 for iter 50.
+
+3. **Root cause**: As the model plays against itself, it converges to a narrow set of patterns. Early training discovers useful strategies by exploring randomly. Later training overfits to exploiting its own weaknesses, producing increasingly specialized (and fragile) play.
+
+**Log**: `training/candidate4_v3_nopretrain_output.log`
+
+### Candidate 4 v4 (step penalty): IN PROGRESS
+
+**Key change from v3:** Replace half-reward for step_limit wins with a continuous per-step penalty:
+- Steps 1-100: no penalty
+- Steps 101-200: -0.001 per step, accumulating
+- At step 200: total penalty = -0.1 for BOTH sides, regardless of outcome
+
+**Goal:** Directly penalize the shuffling/stalling behavior that causes degradation. Unlike half-reward (which only affects step_limit wins), this penalty applies to ALL games that go long.
+
+**Log**: `training/candidate4_v4_output.log`
 
 ---
 
@@ -416,7 +553,10 @@ Parameters: ~26.3M
 | 2. PPO + Reward Shaping (v2) | 14W/1L/25D (66%) | 0W/30L/10D (12.5%) | 0W/38L/2D (2.5%) |
 | 3. PPO + Reward + Curriculum (v1) | 20W/0L/20D (75%) | 1W/24L/15D (21%) | 0W/40L/0D (0%) |
 | 3. PPO + Reward + Curriculum (v2) | 27W/0L/13D (84%) | 1W/27L/12D (17.5%) | 0W/40L/0D (0%) |
-| 4. Mini MCTS + NN | — | — | — |
+| 4v1. AlphaZero (all draws) | 0W/2L/8D (40%) | — | — |
+| 4v2. AlphaZero (move ban) | 3W/6L/1D→0W/10L (35%→0%) | — | — |
+| 4v3. AlphaZero (no-pretrain) | Peak 70%→30% | — | — |
+| 4v4. AlphaZero (step penalty) | In progress | — | — |
 | 5. Full AlphaZero | — | — | — |
 
 ---
@@ -461,6 +601,22 @@ Parameters: ~26.3M
 - As Black, the agent defaults to defensive play that draws but rarely wins
 - **Takeaway:** Self-play training naturally develops a Red-biased strategy due to first-move advantage. Future training could explicitly balance Red/Black experience or add Black-specific objectives
 
+### 5. AlphaZero Self-Play Has Two Problems at Small Scale
+
+| Metric | AlphaZero v1 | AlphaZero v2 | AlphaZero v3 | Best PPO (3v2) |
+|---|---|---|---|---|
+| vs Random (best) | 40% | 35% | **70%** | **84%** |
+| Decisive self-play rate | 0.5% | **93%** | ~93% | ~18% |
+| Training time | 63 min | 45 min | ~4 hrs | 2.8 hrs |
+
+**Problem 1 (v1): All-draws deadlock.** Equal networks produce no decisive games → no value signal → no learning. Fixed in v2 by banning repeated moves and material adjudication.
+
+**Problem 2 (v2): Policy degradation.** Even with 93% decisive games, MCTS at small scale (50 sims, 1.9M params) produces worse policy targets than the pretrained human policy. Training replaces good knowledge with bad knowledge, and eval collapses (35%→0%).
+
+**Problem 3 (v3): Self-play overfitting.** More sims (200) + more training (100 steps) + smaller buffer (20K) peaks at 70% — best AlphaZero result! But the model eventually overfits to narrow self-play patterns. The iter 166 model memorized a single Cannon trick and shuffles pieces endlessly, while the iter 50 model had diverse strategic play.
+
+- **Takeaway:** AlphaZero has three barriers at small scale: (1) draw deadlock — solved with move banning, (2) policy degradation from pretrain — solved by starting from random init, (3) self-play overfitting — the model converges to narrow patterns. Potential fixes: checkpoint pool/league training (diversify opponents), KL divergence penalty (prevent policy drift), or expert iteration on human data
+
 ---
 
 ## Experiments Log
@@ -484,3 +640,12 @@ Parameters: ~26.3M
 | 2026-03-18 | Candidate 3 v2 vs Random (40 games) | 27W/0L/13D (84%) — perfect 20/20 as Red |
 | 2026-03-18 | Candidate 3 v2 vs Greedy (40 games) | 1W/27L/12D (17.5%) — still dominated |
 | 2026-03-18 | Candidate 3 v2 vs Minimax depth-3 (40 games) | 0W/40L/0D (0%) — PPO ceiling reached |
+| 2026-03-18 | Built C++ game engine (pybind11) | 234x speedup over Python engine |
+| 2026-03-18 | Supervised pre-training on 11M human positions | 34.6% move prediction accuracy (epoch 7) |
+| 2026-03-19 | Candidate 4 v1: AlphaZero self-play (212 iters, 3418 games) | 0W/2L/8D vs Random (40%) — worse than all PPO candidates |
+| 2026-03-19 | Candidate 4 v1 analysis | 99.5% draws in self-play. Chicken-and-egg deadlock: no decisive games → no value signal → no improvement |
+| 2026-03-19 | Candidate 4 v2: Move banning + material adjudication (77 iters, 1232 games) | 93% decisive rate (solved draws!), but eval 35%→0% — policy degradation |
+| 2026-03-19 | Candidate 4 v2 analysis | Two separate problems: (1) draw deadlock = solved, (2) MCTS policy targets worse than pretrained policy at small scale |
+| 2026-03-19 | Candidate 4 v3: No-pretrain, 200 sims, 20K buffer, 100 train steps | Peak 70% vs Random at iter 50 — best AlphaZero result |
+| 2026-03-19 | Candidate 4 v3 degradation investigation | Iter 50 has diverse strategy; iter 166 memorized ONE trick (Cannon captures Horse) then shuffles forever. Self-play overfitting. |
+| 2026-03-20 | Candidate 4 v4: Step penalty (-0.001/step after step 100) | In progress — penalizes stalling/shuffling behavior |

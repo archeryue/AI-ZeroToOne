@@ -1,0 +1,11 @@
+[engine] Using C++ engine
+=== Candidate 4: Mini AlphaZero (Single-Process Batched) ===
+Device: cuda
+Skipping pretrained weights (SKIP_PRETRAIN=1)
+Model: 5 res blocks, 64 channels, 1,868,539 params (7.5 MB)
+MCTS: 200 sims, 8 VL batch, c_puct=1.5
+Self-play: 16 parallel games, 200 max steps, 16 games/iter
+Training: 300 iters, 100 train steps/iter
+
+Skipping human buffer seeding (SKIP_PRETRAIN=1)
+Iter   1 | Games:    16 | R/B/D: 5/10/1(D=1) | Len: 200 | PL: 3.2659 | VL: 0.0849 | Buf:   3200 | SP: 113s (8.5g/m) | Train: 2s | Elapsed: 115s

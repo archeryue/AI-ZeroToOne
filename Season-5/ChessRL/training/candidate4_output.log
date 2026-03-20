@@ -1,0 +1,92 @@
+[engine] Using C++ engine
+=== Candidate 4: Mini AlphaZero (Single-Process Batched) ===
+Device: cuda
+Loaded pretrained weights from /home/start-up/AI-ZeroToOne/Season-5/ChessRL/training/candidate4/az_pretrained.pt
+Model: 5 res blocks, 64 channels, 1,868,539 params (7.5 MB)
+MCTS: 50 sims, 8 VL batch, c_puct=1.5
+Self-play: 16 parallel games, 200 max steps, 16 games/iter
+Training: 300 iters, 20 train steps/iter
+
+Loaded 20000 human positions from supervised_training_data_shard012.npz
+Replay buffer seeded with 20000 human positions
+Iter   1 | Games:    16 | R/B/D: 12/3/1(D=1) | Len: 186 | PL: 0.3214 | VL: 0.5638 | Buf:  22984 | SP: 25s (38.0g/m) | Train: 1s | Elapsed: 26s
+Iter   2 | Games:    32 | R/B/D: 12/3/1(D=1) | Len: 194 | PL: 0.5852 | VL: 0.4816 | Buf:  26095 | SP: 25s (38.0g/m) | Train: 0s | Elapsed: 51s
+Iter   3 | Games:    48 | R/B/D: 13/3/0 | Len: 200 | PL: 0.7497 | VL: 0.4382 | Buf:  29295 | SP: 31s (31.4g/m) | Train: 0s | Elapsed: 82s
+Iter   4 | Games:    64 | R/B/D: 15/1/0 | Len: 199 | PL: 0.9827 | VL: 0.3794 | Buf:  32484 | SP: 31s (30.7g/m) | Train: 0s | Elapsed: 114s
+Iter   5 | Games:    80 | R/B/D: 12/4/0 | Len: 197 | PL: 1.1204 | VL: 0.3985 | Buf:  35631 | SP: 32s (29.6g/m) | Train: 0s | Elapsed: 147s
+Iter   6 | Games:    96 | R/B/D: 11/4/1(D=1) | Len: 200 | PL: 1.2467 | VL: 0.3528 | Buf:  38831 | SP: 32s (29.9g/m) | Train: 0s | Elapsed: 179s
+Iter   7 | Games:   112 | R/B/D: 13/2/1(D=1) | Len: 200 | PL: 1.3638 | VL: 0.3184 | Buf:  42031 | SP: 32s (30.0g/m) | Train: 0s | Elapsed: 212s
+Iter   8 | Games:   128 | R/B/D: 9/6/1(D=1) | Len: 200 | PL: 1.4615 | VL: 0.2970 | Buf:  45231 | SP: 32s (30.1g/m) | Train: 0s | Elapsed: 244s
+Iter   9 | Games:   144 | R/B/D: 13/3/0 | Len: 200 | PL: 1.4909 | VL: 0.3191 | Buf:  48431 | SP: 34s (28.1g/m) | Train: 0s | Elapsed: 278s
+Iter  10 | Games:   160 | R/B/D: 10/5/1(D=1) | Len: 200 | PL: 1.5568 | VL: 0.3070 | Buf:  51631 | SP: 32s (29.6g/m) | Train: 0s | Elapsed: 311s
+Iter  11 | Games:   176 | R/B/D: 11/4/1(D=1) | Len: 200 | PL: 1.6355 | VL: 0.2841 | Buf:  54831 | SP: 33s (29.2g/m) | Train: 0s | Elapsed: 345s
+Iter  12 | Games:   192 | R/B/D: 12/4/0 | Len: 200 | PL: 1.7164 | VL: 0.2878 | Buf:  58031 | SP: 32s (29.8g/m) | Train: 0s | Elapsed: 377s
+Iter  13 | Games:   208 | R/B/D: 12/4/0 | Len: 200 | PL: 1.7310 | VL: 0.2957 | Buf:  61231 | SP: 33s (29.1g/m) | Train: 0s | Elapsed: 411s
+Iter  14 | Games:   224 | R/B/D: 11/3/2(D=2) | Len: 200 | PL: 1.8099 | VL: 0.2635 | Buf:  64431 | SP: 33s (28.9g/m) | Train: 0s | Elapsed: 444s
+Iter  15 | Games:   240 | R/B/D: 11/5/0 | Len: 200 | PL: 1.8348 | VL: 0.2792 | Buf:  67631 | SP: 33s (28.9g/m) | Train: 0s | Elapsed: 478s
+Iter  16 | Games:   256 | R/B/D: 13/3/0 | Len: 194 | PL: 1.9029 | VL: 0.2821 | Buf:  70741 | SP: 34s (28.1g/m) | Train: 0s | Elapsed: 512s
+Iter  17 | Games:   272 | R/B/D: 11/4/1(D=1) | Len: 200 | PL: 1.9570 | VL: 0.2651 | Buf:  73941 | SP: 33s (29.3g/m) | Train: 0s | Elapsed: 546s
+Iter  18 | Games:   288 | R/B/D: 10/5/1(D=1) | Len: 200 | PL: 1.9250 | VL: 0.2596 | Buf:  77141 | SP: 35s (27.8g/m) | Train: 0s | Elapsed: 580s
+Iter  19 | Games:   304 | R/B/D: 12/4/0 | Len: 200 | PL: 1.9655 | VL: 0.2426 | Buf:  80341 | SP: 34s (28.2g/m) | Train: 0s | Elapsed: 615s
+Iter  20 | Games:   320 | R/B/D: 13/3/0 | Len: 200 | PL: 1.9765 | VL: 0.2299 | Buf:  83541 | SP: 35s (27.5g/m) | Train: 0s | Elapsed: 650s
+Iter  21 | Games:   336 | R/B/D: 10/6/0 | Len: 200 | PL: 2.0305 | VL: 0.2256 | Buf:  86736 | SP: 33s (28.8g/m) | Train: 0s | Elapsed: 684s
+Iter  22 | Games:   352 | R/B/D: 11/3/2(D=2) | Len: 200 | PL: 2.0483 | VL: 0.2243 | Buf:  89936 | SP: 34s (28.5g/m) | Train: 0s | Elapsed: 718s
+Iter  23 | Games:   368 | R/B/D: 13/2/1(D=1) | Len: 200 | PL: 2.0689 | VL: 0.2340 | Buf:  93136 | SP: 35s (27.5g/m) | Train: 0s | Elapsed: 753s
+Iter  24 | Games:   384 | R/B/D: 12/2/2(D=2) | Len: 200 | PL: 2.0755 | VL: 0.2283 | Buf:  96336 | SP: 35s (27.6g/m) | Train: 0s | Elapsed: 788s
+Iter  25 | Games:   400 | R/B/D: 11/4/1(D=1) | Len: 200 | PL: 2.0958 | VL: 0.2222 | Buf:  99536 | SP: 34s (28.6g/m) | Train: 0s | Elapsed: 822s
+  >> Eval vs Random (10g as Red): 3W / 6L / 1D  (Score: 35%)
+  >> New best model saved! (3W)
+Iter  26 | Games:   416 | R/B/D: 9/6/1(D=1) | Len: 200 | PL: 2.1459 | VL: 0.2320 | Buf: 100000 | SP: 32s (29.7g/m) | Train: 0s | Elapsed: 912s
+Iter  27 | Games:   432 | R/B/D: 11/3/2(D=2) | Len: 200 | PL: 2.2834 | VL: 0.2402 | Buf: 100000 | SP: 32s (29.8g/m) | Train: 0s | Elapsed: 944s
+Iter  28 | Games:   448 | R/B/D: 9/6/1(D=1) | Len: 200 | PL: 2.3237 | VL: 0.2270 | Buf: 100000 | SP: 31s (30.5g/m) | Train: 0s | Elapsed: 976s
+Iter  29 | Games:   464 | R/B/D: 13/3/0 | Len: 200 | PL: 2.4371 | VL: 0.2077 | Buf: 100000 | SP: 31s (31.2g/m) | Train: 0s | Elapsed: 1007s
+Iter  30 | Games:   480 | R/B/D: 8/7/1(D=1) | Len: 200 | PL: 2.5152 | VL: 0.2096 | Buf: 100000 | SP: 32s (29.7g/m) | Train: 0s | Elapsed: 1040s
+Iter  31 | Games:   496 | R/B/D: 12/4/0 | Len: 200 | PL: 2.6368 | VL: 0.2056 | Buf: 100000 | SP: 32s (29.9g/m) | Train: 0s | Elapsed: 1073s
+Iter  32 | Games:   512 | R/B/D: 10/6/0 | Len: 200 | PL: 2.8528 | VL: 0.2216 | Buf: 100000 | SP: 32s (29.6g/m) | Train: 0s | Elapsed: 1106s
+Iter  33 | Games:   528 | R/B/D: 10/4/2(D=2) | Len: 200 | PL: 2.7472 | VL: 0.2031 | Buf: 100000 | SP: 32s (30.3g/m) | Train: 0s | Elapsed: 1138s
+Iter  34 | Games:   544 | R/B/D: 9/6/1(D=1) | Len: 200 | PL: 2.7159 | VL: 0.1953 | Buf: 100000 | SP: 33s (29.0g/m) | Train: 0s | Elapsed: 1171s
+Iter  35 | Games:   560 | R/B/D: 10/3/3(D=3) | Len: 200 | PL: 2.7415 | VL: 0.1892 | Buf: 100000 | SP: 33s (29.1g/m) | Train: 0s | Elapsed: 1204s
+Iter  36 | Games:   576 | R/B/D: 12/2/2(D=2) | Len: 200 | PL: 2.7006 | VL: 0.1792 | Buf: 100000 | SP: 33s (29.0g/m) | Train: 0s | Elapsed: 1238s
+Iter  37 | Games:   592 | R/B/D: 16/0/0 | Len: 200 | PL: 2.7321 | VL: 0.2060 | Buf: 100000 | SP: 33s (29.1g/m) | Train: 0s | Elapsed: 1271s
+Iter  38 | Games:   608 | R/B/D: 5/11/0 | Len: 200 | PL: 2.6586 | VL: 0.2193 | Buf: 100000 | SP: 33s (28.9g/m) | Train: 0s | Elapsed: 1305s
+Iter  39 | Games:   624 | R/B/D: 11/1/4(D=4) | Len: 200 | PL: 2.6753 | VL: 0.1737 | Buf: 100000 | SP: 32s (29.8g/m) | Train: 0s | Elapsed: 1338s
+Iter  40 | Games:   640 | R/B/D: 13/3/0 | Len: 200 | PL: 2.6978 | VL: 0.1787 | Buf: 100000 | SP: 32s (29.9g/m) | Train: 0s | Elapsed: 1370s
+Iter  41 | Games:   656 | R/B/D: 12/3/1(D=1) | Len: 200 | PL: 2.6999 | VL: 0.1738 | Buf: 100000 | SP: 33s (28.8g/m) | Train: 0s | Elapsed: 1404s
+Iter  42 | Games:   672 | R/B/D: 11/4/1(D=1) | Len: 200 | PL: 2.6970 | VL: 0.1920 | Buf: 100000 | SP: 34s (28.4g/m) | Train: 0s | Elapsed: 1438s
+Iter  43 | Games:   688 | R/B/D: 8/4/4(D=4) | Len: 200 | PL: 2.6605 | VL: 0.1904 | Buf: 100000 | SP: 34s (28.0g/m) | Train: 0s | Elapsed: 1473s
+Iter  44 | Games:   704 | R/B/D: 11/4/1(D=1) | Len: 200 | PL: 2.6396 | VL: 0.1687 | Buf: 100000 | SP: 34s (27.8g/m) | Train: 0s | Elapsed: 1508s
+Iter  45 | Games:   720 | R/B/D: 12/2/2(D=2) | Len: 200 | PL: 2.6475 | VL: 0.1665 | Buf: 100000 | SP: 33s (29.1g/m) | Train: 0s | Elapsed: 1541s
+Iter  46 | Games:   736 | R/B/D: 14/2/0 | Len: 200 | PL: 2.6791 | VL: 0.1601 | Buf: 100000 | SP: 32s (29.7g/m) | Train: 0s | Elapsed: 1574s
+Iter  47 | Games:   752 | R/B/D: 12/3/1(D=1) | Len: 191 | PL: 2.6776 | VL: 0.1484 | Buf: 100000 | SP: 33s (29.3g/m) | Train: 0s | Elapsed: 1607s
+Iter  48 | Games:   768 | R/B/D: 8/5/3(D=3) | Len: 189 | PL: 2.6364 | VL: 0.1612 | Buf: 100000 | SP: 33s (29.3g/m) | Train: 0s | Elapsed: 1640s
+Iter  49 | Games:   784 | R/B/D: 12/2/2(D=2) | Len: 200 | PL: 2.6140 | VL: 0.1537 | Buf: 100000 | SP: 33s (29.5g/m) | Train: 0s | Elapsed: 1673s
+Iter  50 | Games:   800 | R/B/D: 10/4/2(D=2) | Len: 200 | PL: 2.6424 | VL: 0.1526 | Buf: 100000 | SP: 34s (28.6g/m) | Train: 0s | Elapsed: 1707s
+  >> Eval vs Random (10g as Red): 1W / 8L / 1D  (Score: 15%)
+Iter  51 | Games:   816 | R/B/D: 14/1/1(D=1) | Len: 200 | PL: 2.6712 | VL: 0.1553 | Buf: 100000 | SP: 33s (29.1g/m) | Train: 0s | Elapsed: 1794s
+Iter  52 | Games:   832 | R/B/D: 13/2/1(D=1) | Len: 200 | PL: 2.6543 | VL: 0.1379 | Buf: 100000 | SP: 33s (29.4g/m) | Train: 0s | Elapsed: 1827s
+Iter  53 | Games:   848 | R/B/D: 12/3/1(D=1) | Len: 188 | PL: 2.6629 | VL: 0.1512 | Buf: 100000 | SP: 33s (29.4g/m) | Train: 0s | Elapsed: 1860s
+Iter  54 | Games:   864 | R/B/D: 12/1/3(D=3) | Len: 200 | PL: 2.6658 | VL: 0.1274 | Buf: 100000 | SP: 32s (29.7g/m) | Train: 0s | Elapsed: 1893s
+Iter  55 | Games:   880 | R/B/D: 10/5/1(D=1) | Len: 200 | PL: 2.6652 | VL: 0.1502 | Buf: 100000 | SP: 32s (29.9g/m) | Train: 0s | Elapsed: 1925s
+Iter  56 | Games:   896 | R/B/D: 10/5/1(D=1) | Len: 200 | PL: 2.6918 | VL: 0.1490 | Buf: 100000 | SP: 33s (29.0g/m) | Train: 0s | Elapsed: 1959s
+Iter  57 | Games:   912 | R/B/D: 9/5/2(D=2) | Len: 200 | PL: 2.6871 | VL: 0.1463 | Buf: 100000 | SP: 34s (28.4g/m) | Train: 0s | Elapsed: 1993s
+Iter  58 | Games:   928 | R/B/D: 7/9/0 | Len: 200 | PL: 2.6839 | VL: 0.1719 | Buf: 100000 | SP: 34s (28.6g/m) | Train: 0s | Elapsed: 2027s
+Iter  59 | Games:   944 | R/B/D: 8/3/5(D=5) | Len: 200 | PL: 2.6789 | VL: 0.1704 | Buf: 100000 | SP: 33s (29.4g/m) | Train: 0s | Elapsed: 2060s
+Iter  60 | Games:   960 | R/B/D: 12/3/1(D=1) | Len: 200 | PL: 2.6708 | VL: 0.1709 | Buf: 100000 | SP: 34s (28.5g/m) | Train: 0s | Elapsed: 2094s
+Iter  61 | Games:   976 | R/B/D: 8/5/3(D=3) | Len: 200 | PL: 2.6635 | VL: 0.1748 | Buf: 100000 | SP: 32s (29.9g/m) | Train: 0s | Elapsed: 2127s
+Iter  62 | Games:   992 | R/B/D: 6/6/4(D=4) | Len: 200 | PL: 2.6818 | VL: 0.1640 | Buf: 100000 | SP: 32s (29.6g/m) | Train: 0s | Elapsed: 2159s
+Iter  63 | Games:  1008 | R/B/D: 7/9/0 | Len: 200 | PL: 2.7115 | VL: 0.1677 | Buf: 100000 | SP: 33s (29.4g/m) | Train: 0s | Elapsed: 2192s
+Iter  64 | Games:  1024 | R/B/D: 3/11/2(D=2) | Len: 200 | PL: 2.6656 | VL: 0.1668 | Buf: 100000 | SP: 33s (29.3g/m) | Train: 0s | Elapsed: 2226s
+Iter  65 | Games:  1040 | R/B/D: 13/3/0 | Len: 200 | PL: 2.6887 | VL: 0.1622 | Buf: 100000 | SP: 31s (30.8g/m) | Train: 0s | Elapsed: 2257s
+Iter  66 | Games:  1056 | R/B/D: 11/4/1(D=1) | Len: 200 | PL: 2.6650 | VL: 0.1687 | Buf: 100000 | SP: 33s (29.1g/m) | Train: 0s | Elapsed: 2291s
+Iter  67 | Games:  1072 | R/B/D: 12/4/0 | Len: 200 | PL: 2.6858 | VL: 0.1480 | Buf: 100000 | SP: 32s (29.7g/m) | Train: 0s | Elapsed: 2323s
+Iter  68 | Games:  1088 | R/B/D: 9/7/0 | Len: 200 | PL: 2.6797 | VL: 0.1728 | Buf: 100000 | SP: 33s (28.8g/m) | Train: 0s | Elapsed: 2357s
+Iter  69 | Games:  1104 | R/B/D: 10/5/1(D=1) | Len: 200 | PL: 2.6685 | VL: 0.1486 | Buf: 100000 | SP: 32s (30.0g/m) | Train: 0s | Elapsed: 2389s
+Iter  70 | Games:  1120 | R/B/D: 9/2/5(D=5) | Len: 200 | PL: 2.6743 | VL: 0.1537 | Buf: 100000 | SP: 33s (29.1g/m) | Train: 0s | Elapsed: 2423s
+Iter  71 | Games:  1136 | R/B/D: 10/4/2(D=2) | Len: 200 | PL: 2.6815 | VL: 0.1504 | Buf: 100000 | SP: 34s (28.3g/m) | Train: 0s | Elapsed: 2457s
+Iter  72 | Games:  1152 | R/B/D: 7/6/3(D=3) | Len: 200 | PL: 2.6830 | VL: 0.1552 | Buf: 100000 | SP: 32s (30.1g/m) | Train: 0s | Elapsed: 2489s
+Iter  73 | Games:  1168 | R/B/D: 7/7/2(D=2) | Len: 200 | PL: 2.6743 | VL: 0.1537 | Buf: 100000 | SP: 33s (28.8g/m) | Train: 0s | Elapsed: 2523s
+Iter  74 | Games:  1184 | R/B/D: 8/8/0 | Len: 200 | PL: 2.6893 | VL: 0.1613 | Buf: 100000 | SP: 34s (28.5g/m) | Train: 0s | Elapsed: 2557s
+Iter  75 | Games:  1200 | R/B/D: 12/3/1(D=1) | Len: 200 | PL: 2.6975 | VL: 0.1503 | Buf: 100000 | SP: 33s (29.1g/m) | Train: 0s | Elapsed: 2591s
+  >> Eval vs Random (10g as Red): 0W / 10L / 0D  (Score: 0%)
+Iter  76 | Games:  1216 | R/B/D: 10/4/2(D=2) | Len: 200 | PL: 2.7062 | VL: 0.1522 | Buf: 100000 | SP: 33s (28.8g/m) | Train: 0s | Elapsed: 2678s
+Iter  77 | Games:  1232 | R/B/D: 6/9/1(D=1) | Len: 200 | PL: 2.7113 | VL: 0.1437 | Buf: 100000 | SP: 33s (28.7g/m) | Train: 0s | Elapsed: 2712s

@@ -45,25 +45,25 @@ from env.action_space import decode_action, NUM_ACTIONS
 # ------ Hyperparameters ------
 NUM_BLOCKS = 5
 CHANNELS = 64
-NUM_SIMULATIONS = 200       # deep search enabled by C++ engine
-VIRTUAL_LOSS_N = 16         # leaves per MCTS batch per game
+NUM_SIMULATIONS = 200       # more sims → better policy targets from MCTS
+VIRTUAL_LOSS_N = 8          # leaves per MCTS batch per game
 C_PUCT = 1.5
 DIRICHLET_ALPHA = 0.3
 DIRICHLET_EPSILON = 0.25
-TEMP_THRESHOLD = 15
+TEMP_THRESHOLD = 30         # explore more moves with temperature
 MAX_GAME_STEPS = 200
 N_PARALLEL = 16             # games running simultaneously
-LR = 2e-3
+LR = 5e-4                  # lower LR to preserve pretrained knowledge
 WEIGHT_DECAY = 1e-4
 BATCH_SIZE = 256
-REPLAY_BUFFER_SIZE = 100_000
-MIN_BUFFER_SIZE = 512
-TRAIN_STEPS_PER_ITER = 100
+REPLAY_BUFFER_SIZE = 20_000
+MIN_BUFFER_SIZE = 1024
+TRAIN_STEPS_PER_ITER = 100  # more steps to actually learn from targets
 GAMES_PER_ITER = 16         # collect this many games before training
 NUM_ITERATIONS = 300
 EVAL_EVERY = 25
 EVAL_GAMES = 10
-SAVE_DIR = os.path.join(SCRIPT_DIR, "candidate4")
+SAVE_DIR = os.path.join(SCRIPT_DIR, "candidate4_v4")
 # ------------------------------
 
 
@@ -216,11 +216,63 @@ def _game_result(game):
 
 
 # ============================================================
+# Material evaluation for draw value signals
+# ============================================================
+
+# Piece values (rough): General=0, Advisor=2, Elephant=2, Horse=4, Chariot=9, Cannon=4.5, Soldier=1
+_PIECE_VALUES = {1: 0, 2: 2, 3: 2, 4: 4, 5: 9, 6: 4.5, 7: 1}
+
+
+def _material_value(game):
+    """Return value in [-1, 1] based on material advantage from Red's perspective.
+
+    Clipped tanh of material difference scaled by ~half a chariot.
+    """
+    red_mat, black_mat = 0.0, 0.0
+    for r in range(10):
+        for c in range(9):
+            piece = game.board.get(r, c)
+            if piece > 0:
+                red_mat += _PIECE_VALUES.get(piece, 0)
+            elif piece < 0:
+                black_mat += _PIECE_VALUES.get(-piece, 0)
+    diff = red_mat - black_mat
+    # Scale so ±5 material ≈ ±0.5 value
+    return max(-1.0, min(1.0, diff / 10.0))
+
+
+REPETITION_PENALTY = 0.5  # penalize both sides for repetition draws
+MATERIAL_BLEND = 0.3      # blend 30% material eval into MCTS leaf values
+
+
+def _material_value_for_player(game):
+    """Material advantage from current player's perspective, in [-1, 1]."""
+    red_mat, black_mat = 0.0, 0.0
+    for r in range(10):
+        for c in range(9):
+            piece = game.board.get(r, c)
+            if piece > 0:
+                red_mat += _PIECE_VALUES.get(piece, 0)
+            elif piece < 0:
+                black_mat += _PIECE_VALUES.get(-piece, 0)
+    diff = red_mat - black_mat  # positive = Red advantage
+    turn = game.current_turn
+    if _USE_CPP:
+        player_diff = diff if turn == cc.RED else -diff
+    else:
+        player_diff = diff if turn == 1 else -diff
+    return max(-1.0, min(1.0, player_diff / 10.0))
+
+
+# ============================================================
 # Batched GPU inference
 # ============================================================
 
-def batch_evaluate(network, device, obs_list, mask_list):
-    """Single batched GPU forward pass. Returns (policies, values) numpy."""
+def batch_evaluate(network, device, obs_list, mask_list, game_list=None):
+    """Single batched GPU forward pass. Returns (policies, values) numpy.
+
+    If game_list is provided, blends material evaluation into values.
+    """
     if not obs_list:
         return np.empty((0, NUM_ACTIONS)), np.empty(0)
     network.eval()
@@ -230,6 +282,13 @@ def batch_evaluate(network, device, obs_list, mask_list):
         log_p, v = network(obs_t, mask_t)
         policies = torch.exp(log_p).cpu().numpy()
         values = v.cpu().numpy()
+
+    # Blend material evaluation if game states provided
+    if game_list is not None and MATERIAL_BLEND > 0:
+        for i, g in enumerate(game_list):
+            mat_v = _material_value_for_player(g)
+            values[i] = (1 - MATERIAL_BLEND) * values[i] + MATERIAL_BLEND * mat_v
+
     return policies, values
 
 
@@ -248,6 +307,8 @@ class GameSlot:
         self.sims_done = 0
         self.finished = False
         self.result = None
+        self.draw_reason = None     # "repetition", "stalemate", or "step_limit"
+        self.position_history = {}  # FEN -> count for repetition detection
 
 
 def run_self_play_batch(network, device, n_parallel=N_PARALLEL,
@@ -266,7 +327,8 @@ def run_self_play_batch(network, device, n_parallel=N_PARALLEL,
         # Restart finished slots until we have enough completed games
         for s in slots:
             if s.finished:
-                completed.append((s.examples, s.result, s.step))
+                completed.append((s.examples, s.result, s.step,
+                                  s.draw_reason, s.game))
                 s.__init__()
 
         if len(completed) >= n_parallel:
@@ -278,7 +340,23 @@ def run_self_play_batch(network, device, n_parallel=N_PARALLEL,
         for s in slots:
             if s.finished or not _is_playing(s.game) or s.step >= MAX_GAME_STEPS:
                 if not s.finished:
-                    s.result = _game_result(s.game)
+                    result = _game_result(s.game)
+                    if result != "draw":
+                        # Real checkmate/stalemate
+                        s.result = result
+                    elif s.step >= MAX_GAME_STEPS:
+                        # Step limit: material advantage wins
+                        mat = _material_value(s.game)
+                        if mat > 0.05:
+                            s.result = "red"
+                        elif mat < -0.05:
+                            s.result = "black"
+                        else:
+                            s.result = "draw"
+                        s.draw_reason = "step_limit"
+                    else:
+                        s.result = "draw"
+                        s.draw_reason = "stalemate"
                     s.finished = True
                 continue
             if s.root is None:
@@ -352,8 +430,10 @@ def run_self_play_batch(network, device, n_parallel=N_PARALLEL,
             if pending:
                 obs_batch = [_get_obs(g) for _, _, g in pending]
                 mask_batch = [_get_mask(g) for _, _, g in pending]
+                game_batch = [g for _, _, g in pending]
                 policies, values = batch_evaluate(network, device,
-                                                  obs_batch, mask_batch)
+                                                  obs_batch, mask_batch,
+                                                  game_batch)
                 total_evals += len(obs_batch)
                 total_batches += 1
 
@@ -387,6 +467,21 @@ def run_self_play_batch(network, device, n_parallel=N_PARALLEL,
                               dtype=np.float32)
             actions = [c.action for c in s.root.children]
 
+            # Ban moves that would repeat a position 3+ times
+            for i, child in enumerate(s.root.children):
+                if id(child) in s.game_states:
+                    child_fen = s.game_states[id(child)].board.to_fen()
+                else:
+                    sim_game = _simulate(s.game, child.action)
+                    child_fen = sim_game.board.to_fen()
+                if s.position_history.get(child_fen, 0) >= 2:
+                    visits[i] = 0.0  # mask out this move
+
+            # If all moves are banned, allow them all (forced repetition)
+            if visits.sum() == 0:
+                visits = np.array([c.visit_count for c in s.root.children],
+                                  dtype=np.float32)
+
             temp = 1.0 if s.step < TEMP_THRESHOLD else 0.1
             if temp < 0.5:
                 # Near-greedy
@@ -413,6 +508,11 @@ def run_self_play_batch(network, device, n_parallel=N_PARALLEL,
             fr, fc, tr, tc = decode_action(action)
             s.game.make_move(fr, fc, tr, tc)
             s.step += 1
+
+            # Track position history (for move banning)
+            fen = s.game.board.to_fen()
+            s.position_history[fen] = s.position_history.get(fen, 0) + 1
+
             s.root = None  # new MCTS search next iteration
 
     return completed, total_evals, total_batches
@@ -456,10 +556,26 @@ def evaluate_vs_random(network, device, num_games=EVAL_GAMES):
     for _ in range(num_games):
         game = _new_game()
         step = 0
+        pos_hist = {}
         while _is_playing(game) and step < MAX_GAME_STEPS:
             if game.current_turn == 1:  # RED = our agent
                 action, _ = mcts.select_action(game, temperature=0.1,
                                                add_noise=False)
+                # Ban repeated moves: if this action leads to 3rd repeat,
+                # pick a different legal action
+                fr, fc, tr, tc = decode_action(action)
+                sim = _simulate(game, action)
+                sim_fen = sim.board.to_fen()
+                if pos_hist.get(sim_fen, 0) >= 2:
+                    # Try other legal actions
+                    mask = _get_mask(game)
+                    legal = np.where(mask)[0]
+                    for alt in legal:
+                        alt_sim = _simulate(game, alt)
+                        alt_fen = alt_sim.board.to_fen()
+                        if pos_hist.get(alt_fen, 0) < 2:
+                            action = alt
+                            break
             else:
                 mask = _get_mask(game)
                 legal = np.where(mask)[0]
@@ -467,8 +583,17 @@ def evaluate_vs_random(network, device, num_games=EVAL_GAMES):
             fr, fc, tr, tc = decode_action(action)
             game.make_move(fr, fc, tr, tc)
             step += 1
+            fen = game.board.to_fen()
+            pos_hist[fen] = pos_hist.get(fen, 0) + 1
 
         result = _game_result(game)
+        # Material adjudication at step limit
+        if result == "draw" and step >= MAX_GAME_STEPS:
+            mat = _material_value(game)
+            if mat > 0.05:
+                result = "red"
+            elif mat < -0.05:
+                result = "black"
         if result == "red":
             wins += 1
         elif result == "black":
@@ -479,6 +604,57 @@ def evaluate_vs_random(network, device, num_games=EVAL_GAMES):
     return wins, losses, draws
 
 
+def load_human_positions(data_dir, n_positions=10000):
+    """Load random positions from supervised training shards for replay buffer seeding.
+
+    Returns list of (obs, uniform_policy, value) tuples.
+    The policy is uniform over legal actions (we don't have MCTS policy for these).
+    """
+    import glob as glob_mod
+    shard_files = sorted(glob_mod.glob(
+        os.path.join(data_dir, "supervised_training_data_shard*.npz")))
+    if not shard_files:
+        print("No supervised data shards found, skipping buffer seeding")
+        return []
+
+    # Load one random shard
+    shard_file = random.choice(shard_files)
+    data = np.load(shard_file)
+    boards = data['boards']    # (N, 90) int8
+    actions = data['actions']  # (N,) int32
+    values = data['values']    # (N,) float32
+    turns = data['turns']      # (N,) int8
+
+    n = min(n_positions, len(boards))
+    indices = np.random.choice(len(boards), n, replace=False)
+
+    positions = []
+    for idx in indices:
+        grid = boards[idx].reshape(10, 9)
+        turn = int(turns[idx])
+
+        if _USE_CPP:
+            board = cc.Board(grid.tolist())
+            obs = cc.board_to_observation(board, turn)
+            mask = cc.get_action_mask(board, turn)
+        else:
+            from env.observation import board_to_observation
+            from engine.board import Board
+            from env.action_space import get_action_mask
+            board = Board(grid.tolist())
+            obs = board_to_observation(board, turn)
+            mask = get_action_mask(board, turn)
+
+        # Create policy: one-hot on the human move
+        action_probs = np.zeros(NUM_ACTIONS, dtype=np.float32)
+        action_probs[actions[idx]] = 1.0
+
+        positions.append((obs, action_probs, float(values[idx])))
+
+    print(f"Loaded {len(positions)} human positions from {os.path.basename(shard_file)}")
+    return positions
+
+
 def main():
     os.makedirs(SAVE_DIR, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -487,6 +663,16 @@ def main():
     print(f"Device: {device}")
 
     network = AlphaZeroNet(num_blocks=NUM_BLOCKS, channels=CHANNELS).to(device)
+
+    # Load pretrained weights if available
+    SKIP_PRETRAIN = os.environ.get("SKIP_PRETRAIN", "0") == "1"
+    pretrained_path = os.path.join(SAVE_DIR, "az_pretrained.pt")
+    if not SKIP_PRETRAIN and os.path.exists(pretrained_path):
+        network.load_state_dict(torch.load(pretrained_path, map_location=device))
+        print(f"Loaded pretrained weights from {pretrained_path}")
+    elif SKIP_PRETRAIN:
+        print("Skipping pretrained weights (SKIP_PRETRAIN=1)")
+
     num_params = sum(p.numel() for p in network.parameters())
     print(f"Model: {NUM_BLOCKS} res blocks, {CHANNELS} channels, "
           f"{num_params:,} params ({num_params * 4 / 1e6:.1f} MB)")
@@ -500,6 +686,16 @@ def main():
 
     optimizer = Adam(network.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     replay_buffer = deque(maxlen=REPLAY_BUFFER_SIZE)
+
+    # Seed replay buffer with human game positions (provides value signal)
+    if not SKIP_PRETRAIN:
+        data_dir = os.path.join(PROJECT_DIR, "data")
+        human_positions = load_human_positions(data_dir, n_positions=20000)
+        for pos in human_positions:
+            replay_buffer.append(pos)
+        print(f"Replay buffer seeded with {len(replay_buffer)} human positions")
+    else:
+        print("Skipping human buffer seeding (SKIP_PRETRAIN=1)")
 
     best_wins = 0
     total_games = 0
@@ -525,10 +721,15 @@ def main():
         RED_VAL = cc.RED if _USE_CPP else 1
         BLACK_VAL = cc.BLACK if _USE_CPP else -1
 
-        for examples, result, steps in completed:
+        for examples, result, steps, draw_reason, final_game in completed:
             iter_results[result] += 1
             iter_steps += steps
             total_games += 1
+
+            # Penalty for long games: -0.001 per step after step 100
+            # Accumulates to -0.1 at step 200, applied to BOTH sides
+            step_penalty = -0.001 * max(0, steps - 100)
+
             for obs, action_probs, player in examples:
                 if result == "red":
                     value = 1.0 if player == RED_VAL else -1.0
@@ -536,6 +737,7 @@ def main():
                     value = 1.0 if player == BLACK_VAL else -1.0
                 else:
                     value = 0.0
+                value += step_penalty
                 replay_buffer.append((obs, action_probs, value))
 
         games_per_min = len(completed) / (selfplay_time / 60) if selfplay_time > 0 else 0
@@ -563,13 +765,13 @@ def main():
         elapsed = time.time() - total_start
         r, b, d = iter_results["red"], iter_results["black"], iter_results["draw"]
         avg_batch = cumulative_evals / max(cumulative_batches, 1)
+        draw_info = f"(D={d})" if d > 0 else ""
         print(f"Iter {iteration:3d} | Games: {total_games:5d} | "
-              f"R/B/D: {r}/{b}/{d} | Len: {avg_len:.0f} | "
+              f"R/B/D: {r}/{b}/{d}{draw_info} | Len: {avg_len:.0f} | "
               f"PL: {avg_pl:.4f} | VL: {avg_vl:.4f} | "
               f"Buf: {len(replay_buffer):6d} | "
               f"SP: {selfplay_time:.0f}s ({games_per_min:.1f}g/m) | "
-              f"Train: {train_time:.0f}s | Elapsed: {elapsed:.0f}s | "
-              f"GPU: {cumulative_evals} evals, avg_batch={avg_batch:.0f}")
+              f"Train: {train_time:.0f}s | Elapsed: {elapsed:.0f}s")
 
         # --- Evaluation ---
         if iteration % EVAL_EVERY == 0:
