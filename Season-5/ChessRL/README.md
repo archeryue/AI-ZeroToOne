@@ -743,6 +743,57 @@ Parameters: ~26.3M
 - v5 tried to remove this "crutch" and use pure checkmate reward, but the signal was too sparse for the value head to learn anything meaningful
 - **Takeaway:** At small scale, the model needs intermediate reward signal (like material adjudication) to bootstrap. Pure checkmate reward requires either (a) much more games to find checkmates, or (b) a way to explicitly teach checkmate patterns. The v3 approach of material adjudication + move banning remains the best foundation
 
+### 7. MCTS + Neural Network Self-Improvement Doesn't Work at Small Scale
+
+Across 6 versions of Candidate 4, the AlphaZero approach consistently failed to beat even a random player:
+
+| Version | Best vs Random | Core Issue |
+|---|---|---|
+| v1 (self-play) | 40% | All-draws deadlock |
+| v2 (move ban) | 35%→0% | Policy degradation |
+| v3 (no-pretrain) | **70%→30%** | Self-play overfitting |
+| v4 (step penalty) | Abandoned | Zero reward signal |
+| v5 (curriculum) | 45% | Value head broken |
+| v6 (material draw) | 50% | Value head stuck negative |
+
+The fundamental problem: **AlphaZero requires the MCTS policy improvement loop to work** — MCTS produces better moves than raw policy → train on MCTS targets → better policy → even better MCTS. At small scale (1 GPU, 300 sims, 1.9M params), this loop never bootstraps:
+
+1. Value head is random at init → MCTS search has no guidance → visit distribution ≈ random
+2. Training on random-quality policy targets → network doesn't improve
+3. No improvement → value head stays random → back to step 1
+
+The original AlphaZero used 5000 TPUs, 800 sims, 30M+ params, and millions of games. The massive compute creates enough search quality even with a weak value head to get the flywheel spinning. On a single local GPU, we don't have that luxury.
+
+**Conclusion:** Mini-AlphaZero is not viable for Xiangqi on local hardware. The best local-scale result remains PPO Candidate 3v2 (84% vs Random). For a stronger Xiangqi AI on local device, a fundamentally different approach is needed.
+
+### 8. Next Direction: NNUE (Efficiently Updatable Neural Network)
+
+Instead of trying to make MCTS + NN self-play work at small scale, a more promising approach is **NNUE** — the technique that made Stockfish the strongest chess engine:
+
+**Key idea:** Separate evaluation from search. Instead of using a neural network inside MCTS (which requires the self-improvement loop to work), use a neural network as the **evaluation function** inside traditional **alpha-beta search** (which already works — our Minimax opponent proves it).
+
+**Why NNUE fits our constraints:**
+- **No self-play loop needed**: Train the NN to predict game outcomes from human game data (supervised learning). We already have 11M positions from 162K human games.
+- **Alpha-beta search already works**: Our Minimax depth-3 opponent beats all PPO and AlphaZero candidates. NNUE replaces the handcrafted eval with a learned eval — strictly better.
+- **Efficient inference**: NNUE uses a sparse architecture with incremental updates — only recomputes the neurons affected by a move, not the whole network. This enables deeper search on local hardware.
+- **Proven at small scale**: Stockfish NNUE runs on a single CPU and beats every AlphaZero-style engine at equivalent hardware.
+
+**Architecture sketch:**
+```
+Input: piece-square features (which piece is on which square)
+  → Sparse linear layer (incrementally updated on each move)
+  → Dense layers (small, fast)
+  → Output: position evaluation scalar
+
+Search: Alpha-beta with NNUE eval instead of material + positional heuristic
+```
+
+**Training plan:**
+1. Generate training data: human game positions + game outcomes (win/loss/draw)
+2. Train NNUE network to predict outcomes (supervised, no RL needed)
+3. Plug into alpha-beta search engine (our C++ engine already supports this)
+4. Evaluate vs Random, Greedy, Minimax
+
 ---
 
 ## Experiments Log
