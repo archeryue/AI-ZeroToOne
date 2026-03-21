@@ -747,6 +747,54 @@ Eval = **100% NNUE** (no material blending).
 
 ---
 
+## Candidate 5 v3: NNUE Self-Improvement Iteration
+
+### Idea
+
+Use the v2 engine to generate new self-play data, then retrain with the same TD(lambda) pipeline. If the self-improvement loop works, v3 should be stronger than v2 because it learns from higher-quality games.
+
+### Experiments
+
+**Experiment A: Train on v2 self-play data only (3k games, 334K positions)**
+
+- v2 engine plays itself at depth 4, same epsilon-greedy noise as v2
+- Data: 3000 games, 333,600 positions, W/L/D = 1236/1129/635 (41%/38%/21%)
+- Board diversity: 100% unique at moves 5/10/20, 76.5% unique overall
+- Training: 30 epochs, best val BCE = 0.5509, sign accuracy = 99.7%
+
+| Opponent | v3 Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 50 | 0 | 0 | **100%** |
+| Minimax (d=4) | 0 | 0 | 20 | **50%** |
+| v2 (depth 4, 20g) | 0 | 0 | 20 | **50%** |
+
+**Result:** Same as v2 vs minimax-d3 (100%), but regressed vs minimax-d4 (50% vs 75%). No improvement over v2 in head-to-head — all draws.
+
+**Experiment B: Train on mixed v1 + v2 data (6k games, 685K positions)**
+
+- All v1-generated data (5000 games, 571K positions) + first 1000 v2-generated games (113K positions)
+- Hypothesis: more diverse data from two different engine strengths = better generalization
+- Training: 30 epochs, best val BCE = 0.5745, sign accuracy = 99.5%
+
+| Opponent | v3-mixed Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 25 | 0 | 25 | **50%** |
+| v2 (depth 4, 20g) | 0 | 0 | 20 | **50%** |
+
+**Result:** Regression — back to v1-level performance vs minimax-d3 (50% vs v2's 100%). The weaker v1 data diluted the stronger v2 signals.
+
+### Analysis
+
+The self-improvement iteration did **not** produce a stronger model:
+
+1. **v3 (v2-only data):** Matched v2 vs minimax-d3 but lost ground vs minimax-d4. The v2 engine's self-play data doesn't contain enough new information beyond what v2 already learned — the model is essentially learning to replicate itself.
+
+2. **v3 (mixed data):** Mixing weaker v1 data actively hurt performance. The v1 engine (with material blending) generates positions evaluated from a fundamentally different perspective than v2 (pure NNUE). The model learns a compromise that's worse than either.
+
+3. **Why self-improvement stalled:** The v2 engine at depth 4 plays deterministic (within epsilon noise) games against itself. The training data captures v2's existing knowledge but not new knowledge. To break through, we likely need either: (a) deeper search (depth 5-6) to generate higher-quality targets, (b) fundamentally different positions (e.g., from human games or different opening books), or (c) search enhancements (null-move pruning, LMR) that increase effective search depth without more compute.
+
+---
+
 ## Candidate 6: Full AlphaZero (TODO)
 
 ### Idea
@@ -800,6 +848,8 @@ Parameters: ~26.3M
 | 4v6. AlphaZero (material draw) | 0W, 50% best (failed) | — | — |
 | **5. NNUE (depth 4)** | **79W/0L/21D (89.5%)** | **50W/0L/50D (75%)** | **0W/0L/20D (50%)** |
 | **5v2. NNUE+TD (depth 4)** | — | — | **50W/0L/0D (100%)** |
+| 5v3. NNUE self-improve (v2 data) | — | — | 50W/0L/0D (100%) vs d3, 0W/0L/20D (50%) vs d4 |
+| 5v3. NNUE self-improve (mixed) | — | — | 25W/0L/25D (50%) vs d3 — regression |
 | 6. Full AlphaZero | — | — | — |
 
 ---
@@ -943,6 +993,34 @@ v1 needed blended eval (60% NNUE + 40% material) because pure NNUE predicted "sl
 
 **Key v1→v2 improvements:** (1) TD(lambda) credit assignment instead of game-outcome labels, (2) BCE loss for sharper gradients, (3) 692 piece-aware features instead of 1260, (4) self-play with epsilon-greedy noise for diverse training data.
 
+### 10. Self-Improvement Iteration Stalls Without New Information
+
+v3 attempted to improve on v2 by using v2's own engine to generate self-play data and retrain. Two experiments:
+
+| Experiment | Data | vs Minimax-d3 | vs Minimax-d4 | vs v2 |
+|---|---|---|---|---|
+| v2 (baseline) | 3k v1-engine games, 339K pos | **100%** | **75%** | — |
+| v3 (v2 data only) | 3k v2-engine games, 334K pos | 100% | 50% ↓ | 0-0-20 |
+| v3 (mixed v1+v2) | 6k games, 685K pos | 50% ↓↓ | — | 0-0-20 |
+
+- **v2-only data:** The model learns to replicate v2 but doesn't surpass it. The self-play data captures v2's existing knowledge, not new knowledge. Performance vs minimax-d4 actually regressed (75% → 50%).
+- **Mixed data:** Adding weaker v1 data actively hurt. The v1 engine (material-blended) and v2 engine (pure NNUE) evaluate positions from fundamentally different perspectives — mixing creates conflicting training signals.
+- **Takeaway:** Self-improvement requires new information the current model doesn't have. At fixed search depth, the engine generates games within its existing capability. To break through, we need either: (a) deeper search to discover longer tactical combinations, (b) search enhancements (null-move pruning, LMR) for greater effective depth, or (c) external knowledge (human games, opening books) to introduce positions outside the engine's experience.
+
+### Current Best: NNUE v2 (Candidate 5v2)
+
+**NNUE v2 is our strongest Xiangqi AI** — the new baseline for all future work.
+
+| Metric | Value |
+|---|---|
+| Architecture | 692 features → 128 accumulator → 256 → 32 → 32 → 1 (98K params) |
+| Training | TD(lambda=0.8) + BCE on 339K self-play positions, 30 seconds |
+| Eval | 100% NNUE (no material blending) |
+| Sign accuracy | 99.8% |
+| vs Minimax-d3 | **50W/0L/0D (100%)** |
+| vs Minimax-d4 | **10W/0L/10D (75%)** |
+| vs all opponents | **Zero losses across all benchmarks** |
+
 ---
 
 ## Experiments Log
@@ -982,4 +1060,6 @@ v1 needed blended eval (60% NNUE + 40% material) because pure NNUE predicted "sl
 | 2026-03-21 | Candidate 5 v2: 692 features + TD(lambda=0.8) + BCE + pure NNUE | 99.8% sign accuracy, 30s training. Self-play data: 3k games, 339K positions with epsilon-greedy noise |
 | 2026-03-21 | Candidate 5 v2 vs Minimax-d3 (50 games) | **50W/0L/0D (100%)** — complete breakthrough, v1 was 0-0-20 |
 | 2026-03-21 | Candidate 5 v2 vs Minimax-d4 (20 games) | **10W/0L/10D (75%)** — beats same-depth material eval with 0 losses |
-| 2026-03-21 | Candidate 5 v3: Self-improvement iteration using v2 engine for self-play | In progress — 3k games with v2 engine, same TD(lambda) pipeline |
+| 2026-03-21 | Candidate 5 v3 (v2 data): 3k v2 self-play games, TD(lambda) training | 99.7% sign acc, 100% vs d3, 50% vs d4 (regression from v2's 75%), 0-0-20 vs v2 |
+| 2026-03-21 | Candidate 5 v3 (mixed): 5k v1 + 1k v2 games combined | 99.5% sign acc, 50% vs d3 (regression to v1-level). Weaker v1 data dilutes v2 signal |
+| 2026-03-21 | v3 vs v2 head-to-head (20 games, depth 4) | 0-0-20 all draws. Self-improvement iteration did not produce a stronger model |
