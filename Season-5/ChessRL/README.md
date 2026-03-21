@@ -13,6 +13,7 @@ Train an AI to play Chinese Chess (Xiangqi) using RL and supervised learning. We
 | 3 | PPO + Reward Shaping + Curriculum | + train vs increasingly strong opponents | Local GPU | Done |
 | 4 | Mini AlphaZero | MCTS + small ResNet self-play (6 versions, all failed) | Local GPU | Done |
 | 5 | NNUE | Supervised NN eval + alpha-beta search | Local GPU | Done |
+| 5v2 | NNUE + TD(lambda) | TD learning + BCE + 692 features, pure NNUE eval | Local GPU | Done |
 | 6 | Full AlphaZero | Full MCTS (800 sims) + large ResNet | Cloud H100 | TODO |
 
 ## Benchmark Opponents
@@ -675,6 +676,77 @@ Performance: **~350K positions/sec training, depth 4 search in ~0.6s** (vs 7.6s 
 
 ---
 
+## Candidate 5 v2: NNUE + TD(lambda) + BCE
+
+### Idea
+
+Fix 4 problems with v1:
+1. **Crude credit assignment** — v1 labels every position with the game outcome. TD(lambda) propagates credit backward using search scores.
+2. **MSE loss** — BCE gives sharper gradients for confident predictions near 0 and 1.
+3. **Wasted features** — v1 maps all 7 piece types to 90 squares (1260 features). But General can only be in 9 squares, Advisor in 5, etc. v2 uses 692 features.
+4. **Material blending** — v1 needs 40% material because the NNUE is too weak alone. v2 is pure NNUE.
+
+### Architecture (~98K params)
+
+```
+Per-perspective input: 692 binary features (piece-aware square mapping)
+  General: 9 sq, Advisor: 5, Elephant: 7, Horse: 90, Chariot: 90, Cannon: 90, Soldier: 55
+  × 2 colors (friendly/enemy) = 346 × 2 = 692
+
+Board normalized so perspective's pieces are always at bottom (color-invariant).
+
+Perspective A (side to move):
+  692 features → Linear(692, 128) → ClippedReLU  [accumulator]
+
+Perspective B (opponent):
+  692 features → Linear(692, 128) → ClippedReLU  [accumulator]
+
+Concat [A, B] = 256
+  → Linear(256, 32) → ClippedReLU
+  → Linear(32, 32) → ClippedReLU
+  → Linear(32, 1) → sigmoid → [0, 1] eval
+
+Parameters: ~98,017 (~98K)
+```
+
+Eval = **100% NNUE** (no material blending).
+
+### Training: TD(lambda) on Self-Play Search Scores
+
+**Phase 1 — Self-play data generation:**
+- v1 NNUE engine plays itself at depth 4 with epsilon-greedy noise
+  - Moves 1-6: fully random (diverse openings)
+  - Moves 7-16: search + epsilon=0.15
+  - Moves 17+: search + epsilon=0.05
+- Records (board, search_score) at each position
+- 3000 games → 339K positions, W/L/D ~27%/48%/25%
+- 12-worker parallel generation
+
+**Phase 2 — TD(lambda=0.8) target computation:**
+- Process each game backward: `target_t = (1-λ) × score_t + λ × (1 - target_{t+1})`
+- Propagates credit: positions leading to strong positions get higher values
+
+**Phase 3 — Training:**
+- 30 epochs, batch 4096, Adam 5e-4, BCE loss
+- LR drop 10x at epoch 20
+- **30 seconds** total on local GPU
+- **Best val BCE: 0.5684, sign accuracy: 99.8%** (vs 77% in v1)
+
+### Benchmark (depth 4)
+
+| Opponent | v2 Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 50 | 0 | 0 | **100%** |
+| Minimax (d=4) | 10 | 0 | 10 | **75%** |
+
+**Key results:**
+- **50-0 vs Minimax-d3** — v1 was 0-0-20 (all draws). v2 is a complete breakthrough.
+- **10-0-10 vs Minimax-d4** — beats same-depth material eval with 0 losses
+- Pure NNUE (no material blending) works because TD training gives accurate position values
+- Sign accuracy jumped from 77% → 99.8% thanks to search-bootstrapped targets
+
+---
+
 ## Candidate 6: Full AlphaZero (TODO)
 
 ### Idea
@@ -727,6 +799,7 @@ Parameters: ~26.3M
 | 4v5. AlphaZero (curriculum) | 0W, 45% best (failed) | — | — |
 | 4v6. AlphaZero (material draw) | 0W, 50% best (failed) | — | — |
 | **5. NNUE (depth 4)** | **79W/0L/21D (89.5%)** | **50W/0L/50D (75%)** | **0W/0L/20D (50%)** |
+| **5v2. NNUE+TD (depth 4)** | — | — | **50W/0L/0D (100%)** |
 | 6. Full AlphaZero | — | — | — |
 
 ---
@@ -856,17 +929,19 @@ Search: Alpha-beta with NNUE eval instead of material + positional heuristic
 |---|---|---|---|---|
 | Best RL (PPO Candidate 3v2) | 84% | 17.5% | 0% | 2.8 hours |
 | Best AlphaZero (Candidate 4v3) | 70% peak | — | — | 4+ hours |
-| **NNUE (Candidate 5, depth 4)** | **89.5%** | **75%** | **50%** | **8 minutes** |
+| NNUE v1 (Candidate 5, depth 4) | 89.5% | 75% | 50% | 8 minutes |
+| **NNUE v2 (Candidate 5v2, depth 4)** | **—** | **—** | **100%** | **30 seconds** |
 
-NNUE is the strongest candidate by a large margin:
-- **vs Greedy: 75% score** — previous best was 21% (Candidate 3). That's a 3.6x improvement.
-- **Zero losses across 220 games** — no PPO or AlphaZero candidate achieved this.
-- **8 minutes training** vs hours for RL — supervised learning is dramatically more efficient.
-- **C++ search gives 760x speedup** over Python, enabling depth-4 search in 0.6s.
+NNUE v2 is the strongest candidate:
+- **100% vs Minimax-d3** — v1 was 50% (all draws). v2 wins every game.
+- **75% vs Minimax-d4** — beats same-depth material eval (10W/0L/10D).
+- **30 seconds training** — TD(lambda) on 339K search-bootstrapped positions.
+- **99.8% sign accuracy** — up from 77% in v1, thanks to search-derived targets.
+- **Pure NNUE eval** — no material blending needed. The network learns material value implicitly.
 
-The blended eval (60% NNUE + 40% material) was key: pure NNUE predicted "slightly winning" for everything, giving the search nothing concrete to optimize. Adding material gives the search a clear goal (win material) while NNUE guides positional play.
+v1 needed blended eval (60% NNUE + 40% material) because pure NNUE predicted "slightly winning" for everything. v2 eliminated this crutch entirely — TD(lambda) with search-bootstrapped targets teaches the network to encode material value implicitly, making pure NNUE eval viable.
 
-**Remaining limitation:** 50% draws vs Minimax-d3 — both use similar depth and material-preserving play. Beating Minimax requires either (a) deeper search to find longer tactical combinations, or (b) endgame-specific training to convert positional advantages into checkmate.
+**Key v1→v2 improvements:** (1) TD(lambda) credit assignment instead of game-outcome labels, (2) BCE loss for sharper gradients, (3) 692 piece-aware features instead of 1260, (4) self-play with epsilon-greedy noise for diverse training data.
 
 ---
 
@@ -902,3 +977,9 @@ The blended eval (60% NNUE + 40% material) was key: pure NNUE predicted "slightl
 | 2026-03-20 | Candidate 4 v4: Step penalty experiments | Abandoned — step penalty + material adj cancel out, zero positive signal for model |
 | 2026-03-20 | Candidate 4 v5: Curriculum with pure checkmate reward (208+ iters, 3343+ games) | 0W vs Random across all evals. Pure checkmate reward too sparse — value head broken (start pos = -0.83), policy diffuse, model shuffles pieces aimlessly |
 | 2026-03-20 | Candidate 4 v6: Material draw reward + 120 step limit (58 iters, 928 games) | 0W vs Random. Value head stuck at -0.55, lost material to random player. Material draw signal too weak to bootstrap MCTS loop |
+| 2026-03-20 | Candidate 5: NNUE supervised on 8.7M human positions, MSE loss | 77.3% sign accuracy, 8 min training. 89.5% vs Random, 75% vs Greedy, 50% vs Minimax-d3 (all draws) |
+| 2026-03-20 | Candidate 5: NNUE eval analysis | Pure NNUE too weak alone → 60/40 blend with material needed. Cannot beat Minimax-d3 — similar depth + both preserve material |
+| 2026-03-21 | Candidate 5 v2: 692 features + TD(lambda=0.8) + BCE + pure NNUE | 99.8% sign accuracy, 30s training. Self-play data: 3k games, 339K positions with epsilon-greedy noise |
+| 2026-03-21 | Candidate 5 v2 vs Minimax-d3 (50 games) | **50W/0L/0D (100%)** — complete breakthrough, v1 was 0-0-20 |
+| 2026-03-21 | Candidate 5 v2 vs Minimax-d4 (20 games) | **10W/0L/10D (75%)** — beats same-depth material eval with 0 losses |
+| 2026-03-21 | Candidate 5 v3: Self-improvement iteration using v2 engine for self-play | In progress — 3k games with v2 engine, same TD(lambda) pipeline |
