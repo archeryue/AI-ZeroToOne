@@ -1,54 +1,58 @@
 # ChessRL Project — Handoff Document
-**Date: 2026-03-20**
+**Date: 2026-03-21**
 
 ## 1. Project Overview
 
 Training a **Chinese Chess (Xiangqi) AI** from scratch. Season 5 of user's AI/ML learning journey (Reinforcement Learning focus).
 
-**Current phase**: Moving to **NNUE** (Efficiently Updatable Neural Network) approach after 6 failed AlphaZero variants.
+**Current phase**: **NNUE Candidate 5 complete** — strongest candidate. Next steps: optimize search or move to Candidate 6 (Full AlphaZero on cloud).
 
-## 2. What Failed: Mini-AlphaZero (Candidate 4, v1-v6)
+## 2. Candidate 5: NNUE (Current Best)
 
-MCTS + neural network self-improvement doesn't work at small scale (1 GPU, 300 sims, 1.9M params). The MCTS policy improvement loop never bootstraps because the value head starts random → MCTS search is unguided → policy targets are noise → network doesn't improve → loop.
+**Architecture**: 170K params, per-perspective piece-square features (1260 binary inputs per side), shared accumulator (Linear 1260→128), dense output (256→32→32→1→sigmoid).
 
-Best result: v3 peaked at **70% vs Random** at iter 50, then degraded to 30% via self-play overfitting. All other variants (curriculum, pure checkmate reward, material draw reward) produced 0 wins vs Random.
+**Eval**: 60% NNUE + 40% material (blended). Pure NNUE was overconfident; material gives concrete tactical signal.
 
-See README.md for full experiment details and insights.
+**Search**: C++ alpha-beta with MVV-LVA move ordering, transposition table (Zobrist, 1M entries), quiescence search (depth 6). Depth 4 in ~0.6s.
 
-## 3. Next Direction: NNUE
+**Results (depth 4, 100 games each)**:
+| Opponent | Win | Loss | Draw | Score |
+|---|---|---|---|---|
+| Random | 79 | 0 | 21 | **89.5%** |
+| Greedy | 50 | 0 | 50 | **75%** |
+| Minimax-d3 | 0 | 0 | 20 | 50% |
 
-**Key idea**: Separate evaluation from search. Train a neural network to evaluate positions (supervised on human games), then plug it into alpha-beta search.
+**Zero losses across 220 games.** Best vs Greedy score of any candidate (previous best: 21%).
 
-**Why NNUE:**
-- No self-play loop needed — supervised training on 11M human positions we already have
-- Alpha-beta search already works — our Minimax depth-3 beats all RL candidates
-- NNUE replaces handcrafted eval with learned eval — strictly better
-- Efficient: sparse architecture with incremental updates enables deep search on local hardware
-- Proven at small scale: Stockfish NNUE runs on single CPU and dominates
+**Key files**:
+- `training/candidate5/nnue_net.py` — NNUE network definition
+- `training/candidate5/train_nnue.py` — Training pipeline (8 min to train)
+- `training/candidate5/export_weights.py` — Export .pt → .bin for C++
+- `training/candidate5/eval_nnue_cpp.py` — Evaluation with C++ search
+- `training/candidate5/checkpoints/nnue_best.pt` — Best PyTorch model
+- `training/candidate5/checkpoints/nnue_weights.bin` — C++ binary weights
+- `engine_c/nnue_search.h` — C++ NNUE eval + alpha-beta search
+- `engine_c/bindings.cpp` — Exposes `NNUESearch` class to Python
 
-**Plan:**
-1. Train NNUE network to predict game outcomes from human game positions
-2. Plug into alpha-beta search (C++ engine already supports this)
-3. Evaluate vs Random, Greedy, Minimax
+## 3. What Could Improve NNUE Further
 
-## 4. Infrastructure Available
+- **Deeper search**: Depth 6 takes ~35s. Optimizations: null-move pruning, late move reductions, aspiration windows.
+- **Incremental accumulator updates**: Currently recomputes full accumulator per position. With make/unmake tracking changed features, only update affected neurons.
+- **Better training**: Train on centipawn-like targets instead of game outcomes. Or train a separate model on endgame positions.
+- **Endgame play**: The draws vs Minimax are due to inability to convert advantages to checkmate. Endgame tablebases or specialized training could help.
+
+## 4. Infrastructure
 
 ### C++ Game Engine: `engine_c/`
 - **234x speedup** over Python engine
 - pybind11, compiled with `-O3 -march=native`
 - Build: `cd engine_c && pip install .`
-- **IMPORTANT**: Must `import engine_c` BEFORE adding ChessRL to `sys.path`
-- Key exports: `Board`, `Game`, `get_legal_moves`, `get_legal_action_indices`, `board_to_observation`, `get_action_mask`, `simulate_action`
+- **IMPORTANT**: After rebuild, copy .so to local dir: `cp /home/start-up/torch/lib/python3.12/site-packages/engine_c/_xiangqi*.so engine_c/`
+- Key exports: `Board`, `Game`, `get_legal_moves`, `NNUESearch`
 
 ### Human Games Dataset
-- **Source**: `data/community-xiangqi-games-database/`
-- **Parsed**: 162,228 games → **11,025,186 training positions** in 23 shards (65.2 MB)
-- **Shard format**: `.npz` with boards (N,90) int8, actions (N,) int32, values (N,) float32, turns (N,) int8
-- **Parser**: `training/parse_games.py`
-
-### Existing Model (for reference)
-- `AlphaZeroNet`: 5 res blocks, 64 channels, 1.9M params — policy + value heads
-- Supervised pre-training: 34.6% move prediction accuracy on human games
+- 162,228 games → 11M positions in 23 shards
+- After 30% draw subsampling: ~8.7M training positions
 
 ## 5. Environment Setup
 
@@ -65,11 +69,11 @@ See README.md for full experiment details and insights.
 
 ## 7. Summary of All Candidates
 
-| Candidate | vs Random | Key Finding |
-|---|---|---|
-| 1. PPO Self-Play | 65% | Sparse reward can't teach chess |
-| 2. PPO + Reward Shaping | 51-66% | Bad reward scales hurt; balanced helps marginally |
-| 3. PPO + Curriculum | 75-84% | Best PPO result, but 0% vs Minimax |
-| 4. AlphaZero (6 versions) | 40-70% peak, all degraded | MCTS+NN self-improvement doesn't work at small scale |
-| 5. NNUE | TODO | Supervised NN eval + alpha-beta search |
-| 6. Full AlphaZero | TODO (future) | Cloud-scale MCTS+NN, needs serious compute |
+| Candidate | vs Random | vs Greedy | Key Finding |
+|---|---|---|---|
+| 1. PPO Self-Play | 65% | 12.5% | Sparse reward can't teach chess |
+| 2. PPO + Reward Shaping | 51-66% | 9-12.5% | Bad reward scales hurt |
+| 3. PPO + Curriculum | 75-84% | 17.5-21% | Best PPO, but 0% vs Minimax |
+| 4. AlphaZero (6 versions) | 40-70% peak | — | MCTS+NN fails at small scale |
+| **5. NNUE** | **89.5%** | **75%** | **Best candidate. 0 losses.** |
+| 6. Full AlphaZero | TODO | TODO | Cloud-scale, needs serious compute |

@@ -1,0 +1,250 @@
+Device: cuda
+Loading 23 shards from /home/start-up/AI-ZeroToOne/Season-5/ChessRL/data...
+Loaded 8,692,945 positions
+  Red wins: 3,878,425
+  Black wins: 3,814,204
+  Draws: 1,000,316
+Train: 8,519,087  Val: 173,858
+Raw data in memory: 826 MB
+Model parameters: 170,721
+Batches per epoch: 1040
+  [100/1040] loss=0.1954 speed=219811 pos/s ETA=35s
+  [200/1040] loss=0.1874 speed=271866 pos/s ETA=25s
+  [300/1040] loss=0.1821 speed=295078 pos/s ETA=21s
+  [400/1040] loss=0.1783 speed=308513 pos/s ETA=17s
+  [500/1040] loss=0.1755 speed=317096 pos/s ETA=14s
+  [600/1040] loss=0.1733 speed=322735 pos/s ETA=11s
+  [700/1040] loss=0.1715 speed=327023 pos/s ETA=8s
+  [800/1040] loss=0.1700 speed=330137 pos/s ETA=6s
+  [900/1040] loss=0.1687 speed=332701 pos/s ETA=3s
+  [1000/1040] loss=0.1675 speed=334799 pos/s ETA=1s
+Epoch  1/20 | Train Loss: 0.1671 | Val Loss: 0.1567 | Sign Acc: 0.736 | LR: 1.0e-03 | Time: 26s
+  -> Saved best model (val_loss=0.1567)
+  [100/1040] loss=0.1545 speed=308657 pos/s ETA=25s
+  [200/1040] loss=0.1542 speed=329773 pos/s ETA=21s
+  [300/1040] loss=0.1538 speed=337969 pos/s ETA=18s
+  [400/1040] loss=0.1536 speed=342009 pos/s ETA=15s
+  [500/1040] loss=0.1534 speed=344385 pos/s ETA=13s
+  [600/1040] loss=0.1532 speed=345812 pos/s ETA=10s
+  [700/1040] loss=0.1529 speed=346954 pos/s ETA=8s
+  [800/1040] loss=0.1528 speed=347951 pos/s ETA=6s
+  [900/1040] loss=0.1526 speed=348621 pos/s ETA=3s
+  [1000/1040] loss=0.1524 speed=349249 pos/s ETA=1s
+Epoch  2/20 | Train Loss: 0.1523 | Val Loss: 0.1511 | Sign Acc: 0.749 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1511)
+  [100/1040] loss=0.1480 speed=312521 pos/s ETA=25s
+  [200/1040] loss=0.1481 speed=332086 pos/s ETA=21s
+  [300/1040] loss=0.1481 speed=339115 pos/s ETA=18s
+  [400/1040] loss=0.1480 speed=342301 pos/s ETA=15s
+  [500/1040] loss=0.1480 speed=344919 pos/s ETA=13s
+  [600/1040] loss=0.1479 speed=346472 pos/s ETA=10s
+  [700/1040] loss=0.1479 speed=347753 pos/s ETA=8s
+  [800/1040] loss=0.1478 speed=348319 pos/s ETA=6s
+  [900/1040] loss=0.1477 speed=349056 pos/s ETA=3s
+  [1000/1040] loss=0.1476 speed=349575 pos/s ETA=1s
+Epoch  3/20 | Train Loss: 0.1476 | Val Loss: 0.1485 | Sign Acc: 0.755 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1485)
+  [100/1040] loss=0.1444 speed=311081 pos/s ETA=25s
+  [200/1040] loss=0.1448 speed=330466 pos/s ETA=21s
+  [300/1040] loss=0.1448 speed=338072 pos/s ETA=18s
+  [400/1040] loss=0.1448 speed=341819 pos/s ETA=15s
+  [500/1040] loss=0.1449 speed=343625 pos/s ETA=13s
+  [600/1040] loss=0.1449 speed=344006 pos/s ETA=10s
+  [700/1040] loss=0.1449 speed=345009 pos/s ETA=8s
+  [800/1040] loss=0.1449 speed=345922 pos/s ETA=6s
+  [900/1040] loss=0.1449 speed=346494 pos/s ETA=3s
+  [1000/1040] loss=0.1449 speed=347072 pos/s ETA=1s
+Epoch  4/20 | Train Loss: 0.1449 | Val Loss: 0.1472 | Sign Acc: 0.757 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1472)
+  [100/1040] loss=0.1425 speed=308879 pos/s ETA=25s
+  [200/1040] loss=0.1425 speed=330755 pos/s ETA=21s
+  [300/1040] loss=0.1427 speed=337723 pos/s ETA=18s
+  [400/1040] loss=0.1429 speed=341662 pos/s ETA=15s
+  [500/1040] loss=0.1429 speed=344165 pos/s ETA=13s
+  [600/1040] loss=0.1431 speed=345626 pos/s ETA=10s
+  [700/1040] loss=0.1431 speed=346860 pos/s ETA=8s
+  [800/1040] loss=0.1431 speed=347731 pos/s ETA=6s
+  [900/1040] loss=0.1432 speed=348271 pos/s ETA=3s
+  [1000/1040] loss=0.1432 speed=348844 pos/s ETA=1s
+Epoch  5/20 | Train Loss: 0.1432 | Val Loss: 0.1460 | Sign Acc: 0.760 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1460)
+  [100/1040] loss=0.1407 speed=308339 pos/s ETA=25s
+  [200/1040] loss=0.1409 speed=326714 pos/s ETA=21s
+  [300/1040] loss=0.1413 speed=335599 pos/s ETA=18s
+  [400/1040] loss=0.1413 speed=339940 pos/s ETA=15s
+  [500/1040] loss=0.1415 speed=342014 pos/s ETA=13s
+  [600/1040] loss=0.1416 speed=343780 pos/s ETA=10s
+  [700/1040] loss=0.1417 speed=345149 pos/s ETA=8s
+  [800/1040] loss=0.1418 speed=346103 pos/s ETA=6s
+  [900/1040] loss=0.1418 speed=346847 pos/s ETA=3s
+  [1000/1040] loss=0.1418 speed=347420 pos/s ETA=1s
+Epoch  6/20 | Train Loss: 0.1418 | Val Loss: 0.1452 | Sign Acc: 0.762 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1452)
+  [100/1040] loss=0.1396 speed=311258 pos/s ETA=25s
+  [200/1040] loss=0.1400 speed=331658 pos/s ETA=21s
+  [300/1040] loss=0.1402 speed=338584 pos/s ETA=18s
+  [400/1040] loss=0.1404 speed=342287 pos/s ETA=15s
+  [500/1040] loss=0.1404 speed=344653 pos/s ETA=13s
+  [600/1040] loss=0.1405 speed=345916 pos/s ETA=10s
+  [700/1040] loss=0.1406 speed=347045 pos/s ETA=8s
+  [800/1040] loss=0.1406 speed=347841 pos/s ETA=6s
+  [900/1040] loss=0.1407 speed=348533 pos/s ETA=3s
+  [1000/1040] loss=0.1408 speed=349186 pos/s ETA=1s
+Epoch  7/20 | Train Loss: 0.1408 | Val Loss: 0.1446 | Sign Acc: 0.764 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1446)
+  [100/1040] loss=0.1388 speed=310566 pos/s ETA=25s
+  [200/1040] loss=0.1391 speed=330469 pos/s ETA=21s
+  [300/1040] loss=0.1393 speed=338022 pos/s ETA=18s
+  [400/1040] loss=0.1394 speed=341488 pos/s ETA=15s
+  [500/1040] loss=0.1396 speed=343680 pos/s ETA=13s
+  [600/1040] loss=0.1397 speed=345223 pos/s ETA=10s
+  [700/1040] loss=0.1397 speed=346444 pos/s ETA=8s
+  [800/1040] loss=0.1398 speed=347361 pos/s ETA=6s
+  [900/1040] loss=0.1399 speed=348041 pos/s ETA=3s
+  [1000/1040] loss=0.1399 speed=348509 pos/s ETA=1s
+Epoch  8/20 | Train Loss: 0.1400 | Val Loss: 0.1440 | Sign Acc: 0.765 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1440)
+  [100/1040] loss=0.1377 speed=310689 pos/s ETA=25s
+  [200/1040] loss=0.1383 speed=330474 pos/s ETA=21s
+  [300/1040] loss=0.1385 speed=337806 pos/s ETA=18s
+  [400/1040] loss=0.1387 speed=341341 pos/s ETA=15s
+  [500/1040] loss=0.1388 speed=343941 pos/s ETA=13s
+  [600/1040] loss=0.1389 speed=345390 pos/s ETA=10s
+  [700/1040] loss=0.1390 speed=346626 pos/s ETA=8s
+  [800/1040] loss=0.1392 speed=347170 pos/s ETA=6s
+  [900/1040] loss=0.1392 speed=347920 pos/s ETA=3s
+  [1000/1040] loss=0.1393 speed=348559 pos/s ETA=1s
+Epoch  9/20 | Train Loss: 0.1393 | Val Loss: 0.1435 | Sign Acc: 0.767 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1435)
+  [100/1040] loss=0.1376 speed=310000 pos/s ETA=25s
+  [200/1040] loss=0.1379 speed=328492 pos/s ETA=21s
+  [300/1040] loss=0.1382 speed=336841 pos/s ETA=18s
+  [400/1040] loss=0.1383 speed=340935 pos/s ETA=15s
+  [500/1040] loss=0.1385 speed=343260 pos/s ETA=13s
+  [600/1040] loss=0.1386 speed=344941 pos/s ETA=10s
+  [700/1040] loss=0.1386 speed=345705 pos/s ETA=8s
+  [800/1040] loss=0.1386 speed=346526 pos/s ETA=6s
+  [900/1040] loss=0.1387 speed=347191 pos/s ETA=3s
+  [1000/1040] loss=0.1387 speed=347712 pos/s ETA=1s
+Epoch 10/20 | Train Loss: 0.1387 | Val Loss: 0.1432 | Sign Acc: 0.767 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1432)
+  [100/1040] loss=0.1369 speed=310334 pos/s ETA=25s
+  [200/1040] loss=0.1371 speed=330504 pos/s ETA=21s
+  [300/1040] loss=0.1373 speed=337833 pos/s ETA=18s
+  [400/1040] loss=0.1375 speed=341762 pos/s ETA=15s
+  [500/1040] loss=0.1377 speed=344155 pos/s ETA=13s
+  [600/1040] loss=0.1378 speed=345624 pos/s ETA=10s
+  [700/1040] loss=0.1379 speed=346755 pos/s ETA=8s
+  [800/1040] loss=0.1380 speed=347377 pos/s ETA=6s
+  [900/1040] loss=0.1381 speed=348114 pos/s ETA=3s
+  [1000/1040] loss=0.1382 speed=346056 pos/s ETA=1s
+Epoch 11/20 | Train Loss: 0.1382 | Val Loss: 0.1433 | Sign Acc: 0.767 | LR: 1.0e-03 | Time: 25s
+  [100/1040] loss=0.1369 speed=270279 pos/s ETA=28s
+  [200/1040] loss=0.1367 speed=284042 pos/s ETA=24s
+  [300/1040] loss=0.1369 speed=280491 pos/s ETA=22s
+  [400/1040] loss=0.1371 speed=281194 pos/s ETA=19s
+  [500/1040] loss=0.1373 speed=279956 pos/s ETA=16s
+  [600/1040] loss=0.1374 speed=289663 pos/s ETA=12s
+  [700/1040] loss=0.1375 speed=297295 pos/s ETA=9s
+  [800/1040] loss=0.1375 speed=303171 pos/s ETA=6s
+  [900/1040] loss=0.1376 speed=307653 pos/s ETA=4s
+  [1000/1040] loss=0.1377 speed=311654 pos/s ETA=1s
+Epoch 12/20 | Train Loss: 0.1377 | Val Loss: 0.1427 | Sign Acc: 0.768 | LR: 1.0e-03 | Time: 27s
+  -> Saved best model (val_loss=0.1427)
+  [100/1040] loss=0.1361 speed=309650 pos/s ETA=25s
+  [200/1040] loss=0.1364 speed=329999 pos/s ETA=21s
+  [300/1040] loss=0.1365 speed=337524 pos/s ETA=18s
+  [400/1040] loss=0.1367 speed=341384 pos/s ETA=15s
+  [500/1040] loss=0.1368 speed=343934 pos/s ETA=13s
+  [600/1040] loss=0.1369 speed=345473 pos/s ETA=10s
+  [700/1040] loss=0.1370 speed=346383 pos/s ETA=8s
+  [800/1040] loss=0.1371 speed=347421 pos/s ETA=6s
+  [900/1040] loss=0.1372 speed=347910 pos/s ETA=3s
+  [1000/1040] loss=0.1373 speed=348393 pos/s ETA=1s
+Epoch 13/20 | Train Loss: 0.1373 | Val Loss: 0.1428 | Sign Acc: 0.768 | LR: 1.0e-03 | Time: 25s
+  [100/1040] loss=0.1354 speed=310717 pos/s ETA=25s
+  [200/1040] loss=0.1357 speed=330937 pos/s ETA=21s
+  [300/1040] loss=0.1361 speed=337850 pos/s ETA=18s
+  [400/1040] loss=0.1362 speed=341537 pos/s ETA=15s
+  [500/1040] loss=0.1364 speed=343875 pos/s ETA=13s
+  [600/1040] loss=0.1365 speed=345470 pos/s ETA=10s
+  [700/1040] loss=0.1367 speed=346625 pos/s ETA=8s
+  [800/1040] loss=0.1368 speed=347241 pos/s ETA=6s
+  [900/1040] loss=0.1369 speed=347760 pos/s ETA=3s
+  [1000/1040] loss=0.1370 speed=348220 pos/s ETA=1s
+Epoch 14/20 | Train Loss: 0.1370 | Val Loss: 0.1425 | Sign Acc: 0.769 | LR: 1.0e-03 | Time: 25s
+  -> Saved best model (val_loss=0.1425)
+  [100/1040] loss=0.1351 speed=310010 pos/s ETA=25s
+  [200/1040] loss=0.1355 speed=330006 pos/s ETA=21s
+  [300/1040] loss=0.1357 speed=337427 pos/s ETA=18s
+  [400/1040] loss=0.1360 speed=340849 pos/s ETA=15s
+  [500/1040] loss=0.1361 speed=343211 pos/s ETA=13s
+  [600/1040] loss=0.1363 speed=344517 pos/s ETA=10s
+  [700/1040] loss=0.1364 speed=345864 pos/s ETA=8s
+  [800/1040] loss=0.1365 speed=346719 pos/s ETA=6s
+  [900/1040] loss=0.1366 speed=347137 pos/s ETA=3s
+  [1000/1040] loss=0.1366 speed=347671 pos/s ETA=1s
+Epoch 15/20 | Train Loss: 0.1367 | Val Loss: 0.1428 | Sign Acc: 0.768 | LR: 1.0e-03 | Time: 25s
+  [100/1040] loss=0.1340 speed=307809 pos/s ETA=25s
+  [200/1040] loss=0.1338 speed=328648 pos/s ETA=21s
+  [300/1040] loss=0.1335 speed=335975 pos/s ETA=18s
+  [400/1040] loss=0.1334 speed=340316 pos/s ETA=15s
+  [500/1040] loss=0.1333 speed=342520 pos/s ETA=13s
+  [600/1040] loss=0.1333 speed=343876 pos/s ETA=10s
+  [700/1040] loss=0.1332 speed=345230 pos/s ETA=8s
+  [800/1040] loss=0.1332 speed=346159 pos/s ETA=6s
+  [900/1040] loss=0.1332 speed=346750 pos/s ETA=3s
+  [1000/1040] loss=0.1332 speed=347318 pos/s ETA=1s
+Epoch 16/20 | Train Loss: 0.1332 | Val Loss: 0.1409 | Sign Acc: 0.772 | LR: 1.0e-04 | Time: 25s
+  -> Saved best model (val_loss=0.1409)
+  [100/1040] loss=0.1323 speed=309982 pos/s ETA=25s
+  [200/1040] loss=0.1324 speed=330067 pos/s ETA=21s
+  [300/1040] loss=0.1325 speed=337776 pos/s ETA=18s
+  [400/1040] loss=0.1325 speed=341012 pos/s ETA=15s
+  [500/1040] loss=0.1325 speed=343433 pos/s ETA=13s
+  [600/1040] loss=0.1326 speed=344881 pos/s ETA=10s
+  [700/1040] loss=0.1326 speed=345776 pos/s ETA=8s
+  [800/1040] loss=0.1326 speed=346493 pos/s ETA=6s
+  [900/1040] loss=0.1326 speed=346921 pos/s ETA=3s
+  [1000/1040] loss=0.1327 speed=347594 pos/s ETA=1s
+Epoch 17/20 | Train Loss: 0.1327 | Val Loss: 0.1409 | Sign Acc: 0.773 | LR: 1.0e-04 | Time: 25s
+  -> Saved best model (val_loss=0.1409)
+  [100/1040] loss=0.1322 speed=309318 pos/s ETA=25s
+  [200/1040] loss=0.1320 speed=329681 pos/s ETA=21s
+  [300/1040] loss=0.1321 speed=336653 pos/s ETA=18s
+  [400/1040] loss=0.1322 speed=340404 pos/s ETA=15s
+  [500/1040] loss=0.1322 speed=342674 pos/s ETA=13s
+  [600/1040] loss=0.1323 speed=344374 pos/s ETA=10s
+  [700/1040] loss=0.1323 speed=345526 pos/s ETA=8s
+  [800/1040] loss=0.1323 speed=346500 pos/s ETA=6s
+  [900/1040] loss=0.1324 speed=347263 pos/s ETA=3s
+  [1000/1040] loss=0.1325 speed=347712 pos/s ETA=1s
+Epoch 18/20 | Train Loss: 0.1324 | Val Loss: 0.1409 | Sign Acc: 0.773 | LR: 1.0e-04 | Time: 25s
+  -> Saved best model (val_loss=0.1409)
+  [100/1040] loss=0.1318 speed=308987 pos/s ETA=25s
+  [200/1040] loss=0.1319 speed=329294 pos/s ETA=21s
+  [300/1040] loss=0.1320 speed=337020 pos/s ETA=18s
+  [400/1040] loss=0.1322 speed=340888 pos/s ETA=15s
+  [500/1040] loss=0.1322 speed=343142 pos/s ETA=13s
+  [600/1040] loss=0.1322 speed=344693 pos/s ETA=10s
+  [700/1040] loss=0.1322 speed=345965 pos/s ETA=8s
+  [800/1040] loss=0.1323 speed=346855 pos/s ETA=6s
+  [900/1040] loss=0.1323 speed=347594 pos/s ETA=3s
+  [1000/1040] loss=0.1323 speed=348229 pos/s ETA=1s
+Epoch 19/20 | Train Loss: 0.1323 | Val Loss: 0.1408 | Sign Acc: 0.773 | LR: 1.0e-04 | Time: 25s
+  -> Saved best model (val_loss=0.1408)
+  [100/1040] loss=0.1319 speed=310627 pos/s ETA=25s
+  [200/1040] loss=0.1321 speed=330176 pos/s ETA=21s
+  [300/1040] loss=0.1320 speed=337543 pos/s ETA=18s
+  [400/1040] loss=0.1321 speed=341257 pos/s ETA=15s
+  [500/1040] loss=0.1321 speed=343587 pos/s ETA=13s
+  [600/1040] loss=0.1321 speed=344888 pos/s ETA=10s
+  [700/1040] loss=0.1321 speed=345795 pos/s ETA=8s
+  [800/1040] loss=0.1322 speed=346664 pos/s ETA=6s
+  [900/1040] loss=0.1322 speed=347329 pos/s ETA=3s
+  [1000/1040] loss=0.1322 speed=347812 pos/s ETA=1s
+Epoch 20/20 | Train Loss: 0.1322 | Val Loss: 0.1408 | Sign Acc: 0.773 | LR: 1.0e-04 | Time: 25s
+  -> Saved best model (val_loss=0.1408)
+
+Training complete. Best val loss: 0.1408
+Checkpoints saved to /home/start-up/AI-ZeroToOne/Season-5/ChessRL/training/candidate5/checkpoints

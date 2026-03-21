@@ -10,6 +10,7 @@
 #include <pybind11/stl.h>
 
 #include "xiangqi.h"
+#include "nnue_search.h"
 
 namespace py = pybind11;
 using namespace xiangqi;
@@ -226,4 +227,34 @@ PYBIND11_MODULE(_xiangqi, m) {
         return py::make_tuple(sq_row(from_sq), sq_col(from_sq),
                               sq_row(to_sq), sq_col(to_sq));
     });
+
+    // ─── NNUE Search Engine ─────────────────────────────────────────────
+    py::class_<nnue::NNUESearch>(m, "NNUESearch")
+        .def(py::init<>())
+        .def("load_weights", &nnue::NNUESearch::load_weights,
+             py::arg("path"))
+        .def("evaluate", [](nnue::NNUESearch& self, const Board& b, int8_t stm) -> float {
+            Board bcopy = b;
+            return self.evaluate(bcopy, stm);
+        }, py::arg("board"), py::arg("stm"))
+        .def("evaluate_nnue", [](nnue::NNUESearch& self, const Board& b, int8_t stm) -> float {
+            Board bcopy = b;
+            return self.evaluate_nnue(bcopy, stm);
+        }, py::arg("board"), py::arg("stm"))
+        .def("search", [](nnue::NNUESearch& self, const Board& b, int8_t stm, int depth) -> py::dict {
+            Board bcopy = b;
+            auto result = self.search(bcopy, stm, depth);
+            py::dict d;
+            d["from_row"] = sq_row(result.best_move.from_sq);
+            d["from_col"] = sq_col(result.best_move.from_sq);
+            d["to_row"] = sq_row(result.best_move.to_sq);
+            d["to_col"] = sq_col(result.best_move.to_sq);
+            d["score"] = result.score;
+            d["depth"] = result.depth;
+            d["nodes"] = self.stats.nodes;
+            d["qnodes"] = self.stats.qnodes;
+            d["tt_hits"] = self.stats.tt_hits;
+            return d;
+        }, py::arg("board"), py::arg("stm"), py::arg("depth"))
+        .def("clear_tt", &nnue::NNUESearch::clear_tt);
 }
