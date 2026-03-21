@@ -2,7 +2,7 @@
 
 ## Goal
 
-Train an AI to play Chinese Chess (Xiangqi) using RL. We progressively improve through 5 candidates, each building on the last, and benchmark every candidate against the 3 AIs from our ChineseChess game (Random, Greedy, Minimax).
+Train an AI to play Chinese Chess (Xiangqi) using RL and supervised learning. We progressively improve through 6 candidates, each building on the last, and benchmark every candidate against the 3 AIs from our ChineseChess game (Random, Greedy, Minimax).
 
 ## Candidate Roadmap
 
@@ -11,8 +11,9 @@ Train an AI to play Chinese Chess (Xiangqi) using RL. We progressively improve t
 | 1 | PPO Self-Play | Baseline — pure self-play, sparse reward | Local GPU | Done |
 | 2 | PPO + Reward Shaping | Material-based intermediate rewards | Local GPU | Done |
 | 3 | PPO + Reward Shaping + Curriculum | + train vs increasingly strong opponents | Local GPU | Done |
-| 4 | Mini MCTS + NN | Lightweight search (50 sims) + small ResNet | Local GPU | TODO |
-| 5 | Full AlphaZero | Full MCTS (200 sims) + ResNet | Cloud H100 | TODO |
+| 4 | Mini AlphaZero | MCTS + small ResNet self-play (6 versions, all failed) | Local GPU | Done |
+| 5 | NNUE | Supervised NN eval + alpha-beta search | Local GPU | TODO |
+| 6 | Full AlphaZero | Full MCTS (800 sims) + large ResNet | Cloud H100 | TODO |
 
 ## Benchmark Opponents
 
@@ -611,11 +612,63 @@ The MCTS policy improvement loop doesn't work at this scale. With a broken value
 
 ---
 
-## Candidate 5: Full AlphaZero (TODO)
+## Candidate 5: NNUE (TODO)
 
 ### Idea
 
-Scale up Candidate 4: deeper network, more MCTS simulations, more training games. This is the full AlphaZero recipe applied to Chinese Chess, trained on cloud GPU.
+**Separate evaluation from search.** Instead of MCTS + NN self-play (which failed at small scale), use a neural network trained on human games as the evaluation function inside traditional alpha-beta search. This is the approach that made Stockfish the strongest chess engine.
+
+### Architecture (~170K params)
+
+```
+Per-perspective input: 14 piece types × 90 squares = 1260 binary features
+
+Perspective A (side to move):
+  1260 features → Linear(1260, 128) → ClippedReLU(0,1)  [accumulator]
+
+Perspective B (opponent):
+  1260 features → Linear(1260, 128) → ClippedReLU(0,1)  [accumulator]
+
+Concat [A, B] = 256
+  → Linear(256, 32) → ClippedReLU
+  → Linear(32, 32) → ClippedReLU
+  → Linear(32, 1) → eval score
+
+Parameters: ~170,721 (~0.17M)
+```
+
+Key property: when a move is made, only 2-4 features change → accumulator can be incrementally updated (no full recomputation needed).
+
+### Training Plan
+
+- **Supervised** on 11M human game positions (no self-play, no RL)
+- Loss: BCE on sigmoid(eval/400) vs game outcome
+- ~30 min training time on local GPU
+- Train NNUE to predict who wins from a given position
+
+### Search: C++ Alpha-Beta
+
+- Alpha-beta with iterative deepening
+- Move ordering (MVV-LVA captures first, TT move first)
+- Transposition table (Zobrist hashing)
+- Quiescence search (extend captures at leaf nodes)
+- Target: depth 5-6 search on local hardware
+
+### Benchmark vs Game AIs
+
+| Opponent | NNUE Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Random | | | | |
+| Greedy | | | | |
+| Minimax (d=3) | | | | |
+
+---
+
+## Candidate 6: Full AlphaZero (TODO)
+
+### Idea
+
+Scale up Candidate 4: deeper network, more MCTS simulations, more training games. This is the full AlphaZero recipe applied to Chinese Chess, trained on cloud GPU with enough compute to make the self-play loop work.
 
 ### Architecture
 
@@ -630,21 +683,12 @@ Input: (15, 10, 9)
 Parameters: ~26.3M
 ```
 
-### MCTS Design
-
-- **Simulations per move:** 200
-- **PUCT exploration constant:** c=1.5
-- **Dirichlet noise at root:** alpha=0.3, epsilon=0.25
-- **Temperature:** 1.0 for first 30 moves, then 0.1
-
 ### Training Plan
 
 - 10 res blocks, 128 channels (26.3M params)
-- 200 MCTS sims per move
+- 800 MCTS sims per move
 - Target: 100K-500K self-play games
 - Device: Cloud H100 (~$3/hr)
-- Estimated: 3-12 hours, ~$10-$36
-- Evaluate against Random, Greedy, Minimax (20 games each)
 
 ### Benchmark vs Game AIs
 
@@ -671,7 +715,8 @@ Parameters: ~26.3M
 | 4v4. AlphaZero (step penalty) | Abandoned (zero signal) | — | — |
 | 4v5. AlphaZero (curriculum) | 0W, 45% best (failed) | — | — |
 | 4v6. AlphaZero (material draw) | 0W, 50% best (failed) | — | — |
-| 5. Full AlphaZero | — | — | — |
+| 5. NNUE | TODO | TODO | TODO |
+| 6. Full AlphaZero | — | — | — |
 
 ---
 

@@ -72,3 +72,4 @@ See README.md for full experiment details and insights.
 | 3. PPO + Curriculum | 75-84% | Best PPO result, but 0% vs Minimax |
 | 4. AlphaZero (6 versions) | 40-70% peak, all degraded | MCTS+NN self-improvement doesn't work at small scale |
 | 5. NNUE | TODO | Supervised NN eval + alpha-beta search |
+| 6. Full AlphaZero | TODO (future) | Cloud-scale MCTS+NN, needs serious compute |
