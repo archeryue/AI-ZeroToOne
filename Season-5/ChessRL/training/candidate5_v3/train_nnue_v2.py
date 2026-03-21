@@ -1,0 +1,1 @@
+../candidate5_v2/train_nnue_v2.py

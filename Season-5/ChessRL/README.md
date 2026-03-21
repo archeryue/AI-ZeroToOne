@@ -14,7 +14,8 @@ Train an AI to play Chinese Chess (Xiangqi) using RL and supervised learning. We
 | 4 | Mini AlphaZero | MCTS + small ResNet self-play (6 versions, all failed) | Local GPU | Done |
 | 5 | NNUE | Supervised NN eval + alpha-beta search | Local GPU | Done |
 | 5v2 | NNUE + TD(lambda) | TD learning + BCE + 692 features, pure NNUE eval | Local GPU | Done |
-| 6 | Full AlphaZero | Full MCTS (800 sims) + large ResNet | Cloud H100 | TODO |
+| 5v3 | NNUE Self-Improve | Self-play iteration with v2 engine (did not surpass v2) | Local GPU | Done |
+| 6 | NNUE + Search Enhancement | Deeper search (NMP, LMR, aspiration) + human data | Local GPU | TODO |
 
 ## Benchmark Opponents
 
@@ -795,39 +796,45 @@ The self-improvement iteration did **not** produce a stronger model:
 
 ---
 
-## Candidate 6: Full AlphaZero (TODO)
+## Candidate 6: NNUE + Search Enhancement (TODO)
+
+### Why Not AlphaZero?
+
+Candidate 4 (6 versions) proved that AlphaZero's MCTS self-improvement loop doesn't work at local scale (1 GPU, <500 sims, 1.9M params). Meanwhile, NNUE v2 with traditional alpha-beta search achieved 100% vs minimax-d3 using only 98K parameters and 30 seconds of training. The evidence is clear: **NNUE + alpha-beta is the right architecture for Xiangqi on local hardware.**
+
+Candidate 5 v3 showed that naive self-improvement (re-training on self-play data at the same depth) stalls — the model replicates itself but doesn't improve. To break through, we need to increase the *quality* of information the model sees, not just the quantity.
 
 ### Idea
 
-Scale up Candidate 4: deeper network, more MCTS simulations, more training games. This is the full AlphaZero recipe applied to Chinese Chess, trained on cloud GPU with enough compute to make the self-play loop work.
+Two directions to push NNUE v2 further:
 
-### Architecture
+**Direction A: Stronger Search (same eval)**
+- **Null-move pruning (NMP)**: Skip a turn and search at reduced depth — if the position is still good, prune the branch. Gives ~1 ply free depth.
+- **Late move reductions (LMR)**: Moves ordered late (unlikely to be good) searched at reduced depth first. Gives another ~0.5-1 ply.
+- **Aspiration windows**: Start alpha-beta with a narrow window around the expected score, re-search if it falls outside. Speeds up search significantly.
+- **Killer moves + history heuristic**: Better move ordering = more pruning = deeper effective search.
+- **Target**: Reach effective depth 6-7 with the same time budget as current depth 4.
 
-ResNet + dual heads (policy + value):
-```
-Input: (15, 10, 9)
-  → Conv2d(15→128, k=3, pad=1) + BN + ReLU
-  → 10 Residual Blocks (128 channels each)
-  → Policy Head: Conv1x1 → FC → 8100 logits
-  → Value Head:  Conv1x1 → FC → tanh → scalar
-
-Parameters: ~26.3M
-```
+**Direction B: Better Eval (external knowledge)**
+- **Human game data**: Train on 11M positions from 162K human games (we already have this data from Candidate 4). Human games contain positional patterns that self-play at depth 4 can never discover.
+- **Multi-source training**: Combine search-bootstrapped targets (TD-lambda from self-play) with supervised targets (human game outcomes). The search targets teach tactical accuracy, human targets teach strategic understanding.
+- **Larger network**: If search is fast enough, we can afford a slightly larger NNUE (e.g., 256 accumulator, 64 hidden) without bottlenecking the search.
 
 ### Training Plan
 
-- 10 res blocks, 128 channels (26.3M params)
-- 800 MCTS sims per move
-- Target: 100K-500K self-play games
-- Device: Cloud H100 (~$3/hr)
+1. Implement search enhancements in C++ engine (NMP, LMR, aspiration, killer moves)
+2. Benchmark v2 eval at effective depth 6-7 — see if deeper search alone beats minimax-d4
+3. Generate new self-play data at higher effective depth (richer targets)
+4. Optionally mix with human game data for positional knowledge
+5. Retrain NNUE and benchmark
 
 ### Benchmark vs Game AIs
 
-| Opponent | AlphaZero Wins | Opponent Wins | Draws | Score |
+| Opponent | NNUE v3 Wins | Opponent Wins | Draws | Score |
 |---|---|---|---|---|
-| Random | | | | |
-| Greedy | | | | |
 | Minimax (d=3) | | | | |
+| Minimax (d=4) | | | | |
+| NNUE v2 (d=4) | | | | |
 
 ---
 
@@ -850,7 +857,7 @@ Parameters: ~26.3M
 | **5v2. NNUE+TD (depth 4)** | — | — | **50W/0L/0D (100%)** |
 | 5v3. NNUE self-improve (v2 data) | — | — | 50W/0L/0D (100%) vs d3, 0W/0L/20D (50%) vs d4 |
 | 5v3. NNUE self-improve (mixed) | — | — | 25W/0L/25D (50%) vs d3 — regression |
-| 6. Full AlphaZero | — | — | — |
+| 6. NNUE + Search Enhancement | — | — | TODO |
 
 ---
 

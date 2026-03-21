@@ -1,0 +1,1 @@
+../candidate5_v2/nnue_net_v2.py

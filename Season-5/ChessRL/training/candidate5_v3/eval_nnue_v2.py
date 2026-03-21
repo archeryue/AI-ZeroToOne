@@ -1,0 +1,1 @@
+../candidate5_v2/eval_nnue_v2.py
