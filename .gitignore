@@ -6,3 +6,7 @@
 *data/
 *.data/
 *logs/
+*.log
+*checkpoints/
+*.so
+*.egg-info/
