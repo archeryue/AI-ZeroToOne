@@ -1,4 +1,4 @@
-"""Candidate 4 v5: AlphaZero with Curriculum Training.
+"""Candidate 4 v6: AlphaZero with Curriculum Training.
 
 Architecture (single process, zero serialization):
   Run N_PARALLEL games simultaneously. Each MCTS step:
@@ -45,13 +45,13 @@ from env.action_space import decode_action, encode_move, NUM_ACTIONS
 # ------ Hyperparameters ------
 NUM_BLOCKS = 5
 CHANNELS = 64
-NUM_SIMULATIONS = 200       # more sims → better policy targets from MCTS
+NUM_SIMULATIONS = 300       # more sims → better policy targets from MCTS
 VIRTUAL_LOSS_N = 8          # leaves per MCTS batch per game
 C_PUCT = 1.5
 DIRICHLET_ALPHA = 0.3
-DIRICHLET_EPSILON = 0.25
-TEMP_THRESHOLD = 30         # explore more moves with temperature
-MAX_GAME_STEPS = 200
+DIRICHLET_EPSILON = 0.4     # more noise at root for exploration (was 0.25)
+TEMP_THRESHOLD = 60          # explore longer into the game (was 30)
+MAX_GAME_STEPS = 120
 N_PARALLEL = 16             # games running simultaneously
 LR = 5e-4
 WEIGHT_DECAY = 1e-4
@@ -63,7 +63,7 @@ GAMES_PER_ITER = 16
 NUM_ITERATIONS = 500
 EVAL_EVERY = 10
 EVAL_GAMES = 10
-SAVE_DIR = os.path.join(SCRIPT_DIR, "candidate4_v5")
+SAVE_DIR = os.path.join(SCRIPT_DIR, "candidate4_v6")
 # --- Curriculum ---
 CURRICULUM_PHASES = ["random", "greedy", "minimax", "self_play"]
 PROMOTE_THRESHOLD = 0.75    # 75% score vs current opponent to promote
@@ -223,9 +223,13 @@ def _game_result(game):
 
 _PIECE_VALUES = {1: 0, 2: 2, 3: 2, 4: 4, 5: 9, 6: 4.5, 7: 1}
 
+# Material scoring for draw rewards (user-specified)
+# 车=0.33, 马/炮=0.16, 士/象=0.08, 兵=0.03
+_SCORE_VALUES = {1: 0, 2: 0.08, 3: 0.08, 4: 0.16, 5: 0.33, 6: 0.16, 7: 0.03}
+
 
 def _material_value(game):
-    """Return value in [-1, 1] from Red's perspective."""
+    """Return value in [-1, 1] from Red's perspective (for MCTS blend)."""
     red_mat, black_mat = 0.0, 0.0
     for r in range(10):
         for c in range(9):
@@ -238,9 +242,25 @@ def _material_value(game):
     return max(-1.0, min(1.0, diff / 10.0))
 
 
+def _material_score(game):
+    """Return material score from Red's perspective for draw reward."""
+    red_mat, black_mat = 0.0, 0.0
+    for r in range(10):
+        for c in range(9):
+            piece = game.board.get(r, c)
+            if piece > 0:
+                red_mat += _SCORE_VALUES.get(piece, 0)
+            elif piece < 0:
+                black_mat += _SCORE_VALUES.get(-piece, 0)
+    return red_mat - black_mat  # positive = Red advantage
+
+
 MATERIAL_BLEND = 0.3
-CHECK_BONUS = 0.15          # bonus when opponent's general is in check
+CHECK_BONUS = 0.03          # small bonus when opponent's general is in check
 ENDGAME_START_PROB = 0.25   # probability of starting from a random endgame position
+DRAW_BASE = -0.2            # base value for step-limit draws (discourages draws)
+DRAW_MAT_MAX = 0.9          # max material score in draw
+DRAW_MAT_MIN = -0.7         # min material score in draw
 
 
 def _in_check(game):
@@ -569,14 +589,7 @@ def run_self_play_batch(network, device, n_parallel=N_PARALLEL,
                     if result != "draw":
                         s.result = result
                     elif s.step >= MAX_GAME_STEPS:
-                        # Material adjudication: need significant lead (~Horse/Cannon)
-                        mat = _material_value(s.game)
-                        if mat > 0.3:
-                            s.result = "red"
-                        elif mat < -0.3:
-                            s.result = "black"
-                        else:
-                            s.result = "draw"
+                        s.result = "draw"
                         s.draw_reason = "step_limit"
                     else:
                         s.result = "draw"
@@ -876,7 +889,7 @@ def main():
     os.makedirs(SAVE_DIR, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print("=== Candidate 4 v5: AlphaZero with Curriculum ===")
+    print("=== Candidate 4 v6: AlphaZero with Curriculum ===")
     print(f"Device: {device}")
 
     network = AlphaZeroNet(num_blocks=NUM_BLOCKS, channels=CHANNELS).to(device)
@@ -905,29 +918,40 @@ def main():
     optimizer = Adam(network.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     replay_buffer = deque(maxlen=REPLAY_BUFFER_SIZE)
 
-    if not SKIP_PRETRAIN:
+    # --- Resume from checkpoint if available ---
+    start_iteration = 1
+    best_wins = 0
+    total_games = 0
+    phase_idx = 0
+    checkpoint_path = os.path.join(SAVE_DIR, "az_checkpoint.pt")
+    RESUME = os.environ.get("RESUME", "0") == "1"
+    if RESUME and os.path.exists(checkpoint_path):
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        network.load_state_dict(ckpt['model_state'])
+        optimizer.load_state_dict(ckpt['optimizer_state'])
+        start_iteration = ckpt['iteration'] + 1
+        total_games = ckpt.get('total_games', 0)
+        best_wins = ckpt.get('best_wins', 0)
+        phase_idx = ckpt.get('phase_idx', 0)
+        print(f"Resumed from checkpoint at iteration {ckpt['iteration']}")
+        print(f"  total_games={total_games}, best_wins={best_wins}, phase={CURRICULUM_PHASES[phase_idx]}")
+    elif not SKIP_PRETRAIN:
         data_dir = os.path.join(PROJECT_DIR, "data")
         human_positions = load_human_positions(data_dir, n_positions=20000)
         for pos in human_positions:
             replay_buffer.append(pos)
         print(f"Replay buffer seeded with {len(replay_buffer)} human positions")
     else:
-        print("Skipping human buffer seeding (SKIP_PRETRAIN=1)")
+        print("Skipping pretrained weights (SKIP_PRETRAIN=1)")
 
-    best_wins = 0
-    total_games = 0
     cumulative_evals = 0
     cumulative_batches = 0
     total_start = time.time()
 
-    # Checkmate boost: track running checkmate rate over recent games
-    recent_checkmates = deque(maxlen=160)  # ~10 iterations of games
-
     # Curriculum state
-    phase_idx = 0
     current_phase = CURRICULUM_PHASES[phase_idx]
 
-    for iteration in range(1, NUM_ITERATIONS + 1):
+    for iteration in range(start_iteration, NUM_ITERATIONS + 1):
         iter_start = time.time()
 
         # --- Self-play / Curriculum play ---
@@ -951,31 +975,24 @@ def main():
             is_checkmate = (result != "draw" and draw_reason != "step_limit")
             if is_checkmate:
                 iter_checkmates += 1
-            recent_checkmates.append(1 if is_checkmate else 0)
 
-            # Penalty for long games: -0.005 per step after step 100
-            step_penalty = -0.005 * max(0, steps - 100)
-
-            # Half reward (0.5) for material adjudication wins
-            reward_scale = 0.5 if draw_reason == "step_limit" else 1.0
-
-            # Checkmate boost: upweight rare checkmate games
-            cm_rate = sum(recent_checkmates) / max(len(recent_checkmates), 1)
-            if is_checkmate and cm_rate < 0.5:
-                boost = max(1, min(10, round(0.5 / max(cm_rate, 0.05))))
-            else:
-                boost = 1
-
+            # Reward assignment
             for obs, action_probs, player in examples:
-                if result == "red":
-                    value = reward_scale if player == RED_VAL else -reward_scale
-                elif result == "black":
-                    value = reward_scale if player == BLACK_VAL else -reward_scale
+                if is_checkmate:
+                    # Decisive: +1/-1
+                    if result == "red":
+                        value = 1.0 if player == RED_VAL else -1.0
+                    else:
+                        value = 1.0 if player == BLACK_VAL else -1.0
                 else:
-                    value = 0.0
-                value += step_penalty
-                for _ in range(boost):
-                    replay_buffer.append((obs, action_probs, value))
+                    # Draw at step limit: base -0.2 + material score
+                    mat_diff = _material_score(final_game)  # from Red's perspective
+                    if player == RED_VAL:
+                        raw = DRAW_BASE + mat_diff
+                    else:
+                        raw = DRAW_BASE - mat_diff
+                    value = max(DRAW_MAT_MIN, min(DRAW_MAT_MAX, raw))
+                replay_buffer.append((obs, action_probs, value))
 
         games_per_min = len(completed) / (selfplay_time / 60) if selfplay_time > 0 else 0
         avg_len = iter_steps / max(len(completed), 1)
@@ -1002,10 +1019,8 @@ def main():
         elapsed = time.time() - total_start
         r, b, d = iter_results["red"], iter_results["black"], iter_results["draw"]
         cm_pct = iter_checkmates / max(len(completed), 1) * 100
-        cm_rate = sum(recent_checkmates) / max(len(recent_checkmates), 1)
-        cm_boost = max(1, min(10, round(0.5 / max(cm_rate, 0.05)))) if cm_rate < 0.5 else 1
         print(f"Iter {iteration:3d} [{current_phase:>8s}] | Games: {total_games:5d} | "
-              f"R/B/D: {r}/{b}/{d} CM:{iter_checkmates}({cm_pct:.0f}%)x{cm_boost} | Len: {avg_len:.0f} | "
+              f"R/B/D: {r}/{b}/{d} CM:{iter_checkmates}({cm_pct:.0f}%) | Len: {avg_len:.0f} | "
               f"PL: {avg_pl:.4f} | VL: {avg_vl:.4f} | "
               f"Buf: {len(replay_buffer):6d} | "
               f"SP: {selfplay_time:.0f}s ({games_per_min:.1f}g/m) | "

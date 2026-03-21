@@ -498,29 +498,29 @@ Ran comprehensive diagnostics comparing the peak model (iter 50, 70%) vs degrade
 
 **Log**: `training/candidate4_v4_output.log`
 
-### Candidate 4 v5 (curriculum): IN PROGRESS
+### Candidate 4 v5 (curriculum): FAILED
 
-**Major redesign** — instead of pure self-play, use curriculum training with progressively stronger opponents:
+**Major redesign** — instead of pure self-play, use curriculum training with progressively stronger opponents.
 
 **Curriculum phases**: Random → Greedy → Minimax (depth 2) → Self-play. Promote when eval score ≥ 75% vs current opponent.
 
-**Key features:**
+**Key features (evolved across multiple restarts):**
 - **Curriculum opponents**: Greedy (1-ply material lookahead) and Minimax (alpha-beta depth 2) implemented using C++ engine primitives
 - **Agent plays both sides**: Half Red, half Black per batch — eliminates color bias
 - **Only agent MCTS positions** stored as training examples (opponent moves have no policy targets)
-- **Check bonus (+0.15)**: MCTS leaf evaluation penalizes positions where current player is in check, guiding search toward checking sequences and checkmate
-- **Endgame starting positions (25%)**: Games randomly start from mid/endgame positions (40-80 random moves played first), exposing model to positions where checkmate is achievable
-- **Higher material adjudication threshold (0.3)**: Need ~Horse/Cannon advantage to win by adjudication, forcing more actual checkmates
-- **Checkmate boost**: Rare checkmate games upweighted in replay buffer (up to 10x when checkmate rate < 5%, scaling down as rate increases)
-- **Step penalty**: -0.005/step after step 100, -0.5 at step 200 for both sides
-- **Half reward (0.5)** for material adjudication wins
-- **200 MCTS sims for eval** (was 50) — matches training strength
+- **Check bonus (+0.15)**: MCTS leaf evaluation penalizes positions where current player is in check
+- **Endgame starting positions (25%)**: Games randomly start from mid/endgame positions (40-80 random moves played first)
+- **Checkmate boost**: Rare checkmate games upweighted in replay buffer (up to 10x when checkmate rate < 5%)
+- **Pure checkmate reward**: +1/-1 for checkmate only, 0 for everything else (no material adjudication, no step penalty)
+- **Draw downsampling**: Only 25% of draw game examples kept in replay buffer
+- **Increased exploration**: Dirichlet epsilon 0.4 (was 0.25), temperature threshold 60 moves (was 30)
+- **300 MCTS sims** (increased from 200)
 
 **Training Config:**
 
 | Param | Value |
 |---|---|
-| MCTS sims | 200 (train and eval) |
+| MCTS sims | 300 (train and eval) |
 | Parallel games | 16 |
 | Replay buffer | 20,000 |
 | Train steps/iter | 100 |
@@ -529,7 +529,85 @@ Ran comprehensive diagnostics comparing the peak model (iter 50, 70%) vs degrade
 | Curriculum | random → greedy → minimax → self_play |
 | Promote threshold | 75% score |
 
+**Training Results (208+ iterations, 3343+ games, ~9 hours):**
+
+Never promoted past random phase. All 18 eval checkpoints showed 0 wins:
+
+| Eval vs Random | Score |
+|---|---|
+| Iter 30 | 0W/2L/8D (40%) |
+| Iter 40 | 0W/3L/7D (35%) |
+| Iter 80 | 0W/0L/10D (50%) |
+| Iter 100 | 0W/1L/9D (45%) |
+| Iter 150 | 0W/1L/9D (45%) |
+| Iter 200 | 0W/1L/9D (45%) |
+
+Checkmate rate in self-play: ~15-30% per iteration (vs random opponent), but model never learned to win in eval.
+
+**Diagnostic — Raw Network Output on Full Game (iter 200):**
+
+Played model (greedy from raw network, no MCTS) vs random opponent for 200 moves:
+
+1. **Value head is broken**: Start position value = **-0.826** (model thinks it's heavily losing from move 1). Values oscillate wildly: -0.826 → -0.612 → -0.190 → -0.345 → -0.998 → -1.000 within the first 12 moves. No stable evaluation.
+
+2. **Policy is diffuse**: Top move gets only ~10-17% probability. No strong preferences — the model treats most legal moves as roughly equal.
+
+3. **No strategic plan**: Model moves pieces aimlessly — Soldier advance, Cannon repositioning, Horse shuffle — with no coordination or attack plan. Captures are incidental, not deliberate.
+
+4. **Piece shuffling in late game**: Elephant moves (9,2)→(7,4)→(9,2)→(7,4) repeatedly. General oscillates between (9,3) and (9,4). Model runs out of ideas and loops.
+
+5. **Result**: Step limit (200) — draw. Model has material advantage (captured pieces via random opponent blunders) but cannot convert to checkmate.
+
+**Root cause — Pure checkmate reward is too sparse:**
+
+With only +1/-1 for checkmate and 0 for everything else:
+- ~75-80% of games end in draws (step limit) → value=0 for all positions → value head collapses toward 0 or learns noise
+- The ~20% checkmate games are mostly the random opponent blundering into checkmate — not the model learning to force checkmate
+- Even with 10x checkmate boost and 25% draw keep rate, the signal-to-noise ratio is too low
+- Value head converges to near-zero/negative for all positions → MCTS has no value guidance → search is effectively random → policy targets are noise
+
 **Log**: `training/candidate4_v5_output.log`
+
+### Candidate 4 v6 (material draw reward): FAILED
+
+**Key changes from v5:**
+- **Material-based draw reward**: Draw at step limit → `clamp(-0.2 + material_diff, -0.7, 0.9)` instead of pure 0
+  - Material scoring: 车=0.33, 马/炮=0.16, 士/象=0.08, 兵=0.03
+  - Equal material draw = -0.2 (discourages draws)
+  - Material advantage up to +0.9, deficit down to -0.7
+- **Checkmate**: Still +1/-1 (unchanged)
+- **Shorter games**: 120 max steps (was 200) — faster iterations
+- **Smaller check bonus**: 0.03 (was 0.15)
+- **Removed**: Checkmate boost upsampling, draw downsampling
+- **Kept**: Curriculum, endgame starts (25%), Dirichlet epsilon 0.4, temp threshold 60, 300 MCTS sims
+
+**Training Results (58 iterations, 928 games, ~1.5 hours):**
+
+| Eval vs Random | Score |
+|---|---|
+| Iter 10 | 0W/1L/9D (45%) |
+| Iter 20 | 0W/0L/10D (50%) |
+| Iter 30 | 0W/0L/10D (50%) |
+| Iter 40 | 0W/0L/10D (50%) |
+| Iter 50 | 0W/1L/9D (45%) |
+
+Checkmate rate dropped from ~12% early to mostly 0% by iter 40+. Speed improved to 12 games/min (was 8 g/m with 200 steps).
+
+**Diagnostic — Raw Network Output (iter 50):**
+
+1. **Value head stuck negative**: Start position = **-0.55**. All positions evaluated between -0.4 and -0.7. The model thinks every position is losing — the draw base of -0.2 biased the value head negative, and it overshot to ~-0.5.
+
+2. **Policy still diffuse**: Top move gets 10-27%. No strong preferences.
+
+3. **Lost material to random**: Final material Red=1.14, Black=1.41 (diff=-0.27). The model can't even accumulate material advantage against random — it doesn't prioritize captures.
+
+4. **No improvement over v5**: Same symptoms — aimless piece movement, no attack coordination, piece shuffling.
+
+**Root cause — same as all v3-v6 variants:**
+
+The MCTS policy improvement loop doesn't work at this scale. With a broken value head, MCTS search is effectively random → produces noise policy targets → training on noise doesn't improve the network → value head stays broken. The material draw reward gives *some* signal (VL=0.01 vs 0.00), but it's not enough to break the cycle.
+
+**Log**: `training/candidate4_v6_output.log`
 
 ---
 
@@ -591,7 +669,8 @@ Parameters: ~26.3M
 | 4v2. AlphaZero (move ban) | 3W/6L/1D→0W/10L (35%→0%) | — | — |
 | 4v3. AlphaZero (no-pretrain) | Peak 70%→30% | — | — |
 | 4v4. AlphaZero (step penalty) | Abandoned (zero signal) | — | — |
-| 4v5. AlphaZero (curriculum) | In progress | — | — |
+| 4v5. AlphaZero (curriculum) | 0W, 45% best (failed) | — | — |
+| 4v6. AlphaZero (material draw) | 0W, 50% best (failed) | — | — |
 | 5. Full AlphaZero | — | — | — |
 
 ---
@@ -652,6 +731,18 @@ Parameters: ~26.3M
 
 - **Takeaway:** AlphaZero has three barriers at small scale: (1) draw deadlock — solved with move banning, (2) policy degradation from pretrain — solved by starting from random init, (3) self-play overfitting — the model converges to narrow patterns. Potential fixes: checkpoint pool/league training (diversify opponents), KL divergence penalty (prevent policy drift), or expert iteration on human data
 
+### 6. Reward Signal is Everything — Too Sparse or Too Dense Both Fail
+
+| Reward Design | Result | Problem |
+|---|---|---|
+| Material adj (0.5) + step penalty (-0.5) | Zero signal | Rewards cancel: +0.5 - 0.5 = 0 at step 200 |
+| Pure checkmate (+1/-1 only) | Broken value head | ~80% draws produce value=0 everywhere; 20% checkmates from random blunders, not learned skill |
+| Material adj (v3, 0.5) no penalty | Peak 70% | Best result — material wins give clear positive signal to bootstrap |
+
+- The v3 result (peak 70%) used material adjudication at step limit to give the model clear win/loss signal from the start
+- v5 tried to remove this "crutch" and use pure checkmate reward, but the signal was too sparse for the value head to learn anything meaningful
+- **Takeaway:** At small scale, the model needs intermediate reward signal (like material adjudication) to bootstrap. Pure checkmate reward requires either (a) much more games to find checkmates, or (b) a way to explicitly teach checkmate patterns. The v3 approach of material adjudication + move banning remains the best foundation
+
 ---
 
 ## Experiments Log
@@ -684,4 +775,5 @@ Parameters: ~26.3M
 | 2026-03-19 | Candidate 4 v3: No-pretrain, 200 sims, 20K buffer, 100 train steps | Peak 70% vs Random at iter 50 — best AlphaZero result |
 | 2026-03-19 | Candidate 4 v3 degradation investigation | Iter 50 has diverse strategy; iter 166 memorized ONE trick (Cannon captures Horse) then shuffles forever. Self-play overfitting. |
 | 2026-03-20 | Candidate 4 v4: Step penalty experiments | Abandoned — step penalty + material adj cancel out, zero positive signal for model |
-| 2026-03-20 | Candidate 4 v5: Curriculum (random→greedy→minimax→self-play) | In progress — check bonus, endgame starts, checkmate boost, higher adj threshold |
+| 2026-03-20 | Candidate 4 v5: Curriculum with pure checkmate reward (208+ iters, 3343+ games) | 0W vs Random across all evals. Pure checkmate reward too sparse — value head broken (start pos = -0.83), policy diffuse, model shuffles pieces aimlessly |
+| 2026-03-20 | Candidate 4 v6: Material draw reward + 120 step limit (58 iters, 928 games) | 0W vs Random. Value head stuck at -0.55, lost material to random player. Material draw signal too weak to bootstrap MCTS loop |
