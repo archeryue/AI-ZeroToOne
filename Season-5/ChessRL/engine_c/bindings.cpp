@@ -11,6 +11,7 @@
 
 #include "xiangqi.h"
 #include "nnue_search.h"
+#include "nnue_search_v2.h"
 
 namespace py = pybind11;
 using namespace xiangqi;
@@ -257,4 +258,36 @@ PYBIND11_MODULE(_xiangqi, m) {
             return d;
         }, py::arg("board"), py::arg("stm"), py::arg("depth"))
         .def("clear_tt", &nnue::NNUESearch::clear_tt);
+
+    // ─── NNUE v2 Search Engine ──────────────────────────────────────────
+    py::class_<nnue_v2::NNUESearchV2>(m, "NNUESearchV2")
+        .def(py::init<>())
+        .def("load_weights", &nnue_v2::NNUESearchV2::load_weights,
+             py::arg("path"))
+        .def("set_nnue_weight", &nnue_v2::NNUESearchV2::set_nnue_weight,
+             py::arg("weight"))
+        .def("evaluate", [](nnue_v2::NNUESearchV2& self, const Board& b, int8_t stm) -> float {
+            Board bcopy = b;
+            return self.evaluate(bcopy, stm);
+        }, py::arg("board"), py::arg("stm"))
+        .def("evaluate_nnue", [](nnue_v2::NNUESearchV2& self, const Board& b, int8_t stm) -> float {
+            Board bcopy = b;
+            return self.evaluate_nnue(bcopy, stm);
+        }, py::arg("board"), py::arg("stm"))
+        .def("search", [](nnue_v2::NNUESearchV2& self, const Board& b, int8_t stm, int depth) -> py::dict {
+            Board bcopy = b;
+            auto result = self.search(bcopy, stm, depth);
+            py::dict d;
+            d["from_row"] = sq_row(result.best_move.from_sq);
+            d["from_col"] = sq_col(result.best_move.from_sq);
+            d["to_row"] = sq_row(result.best_move.to_sq);
+            d["to_col"] = sq_col(result.best_move.to_sq);
+            d["score"] = result.score;
+            d["depth"] = result.depth;
+            d["nodes"] = self.stats.nodes;
+            d["qnodes"] = self.stats.qnodes;
+            d["tt_hits"] = self.stats.tt_hits;
+            return d;
+        }, py::arg("board"), py::arg("stm"), py::arg("depth"))
+        .def("clear_tt", &nnue_v2::NNUESearchV2::clear_tt);
 }
