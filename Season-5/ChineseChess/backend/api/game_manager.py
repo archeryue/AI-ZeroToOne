@@ -10,6 +10,7 @@ from ai.base import BaseAI
 from ai.random_ai import RandomAI
 from ai.greedy_ai import GreedyAI
 from ai.minimax_ai import MinimaxAI
+from ai.nnue_ai import NNUEAI
 from engine.board import RED, BLACK
 
 
@@ -17,6 +18,7 @@ AI_TYPES = {
     "random": lambda depth: RandomAI(),
     "greedy": lambda depth: GreedyAI(),
     "minimax": lambda depth: MinimaxAI(depth=depth),
+    "nnue": lambda depth: NNUEAI(depth=depth),
 }
 
 

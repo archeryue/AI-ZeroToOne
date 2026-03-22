@@ -145,11 +145,12 @@ export default function Home() {
                 <option value="random">Random</option>
                 <option value="greedy">Greedy (Material)</option>
                 <option value="minimax">Minimax (Alpha-Beta)</option>
+                <option value="nnue">NNUE (Neural Network)</option>
                 <option value="human">Human (2-player)</option>
               </select>
             </div>
 
-            {aiType === "minimax" && (
+            {(aiType === "minimax" || aiType === "nnue") && (
               <div>
                 <label className="block text-stone-300 text-sm font-medium mb-1">
                   Search Depth: {aiDepth}

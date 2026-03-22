@@ -6,8 +6,8 @@ from typing import Optional
 
 class CreateGameRequest(BaseModel):
     player_color: str = "red"  # "red" or "black"
-    ai_type: str = "greedy"  # "random", "greedy", "minimax", "human"
-    ai_depth: int = 3  # depth for minimax AI
+    ai_type: str = "greedy"  # "random", "greedy", "minimax", "nnue", "human"
+    ai_depth: int = 3  # depth for minimax/nnue AI
 
 
 class MoveRequest(BaseModel):

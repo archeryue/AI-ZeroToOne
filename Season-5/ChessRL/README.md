@@ -14,8 +14,8 @@ Train an AI to play Chinese Chess (Xiangqi) using RL and supervised learning. We
 | 4 | Mini AlphaZero | MCTS + small ResNet self-play (6 versions, all failed) | Local GPU | Done |
 | 5 | NNUE | Supervised NN eval + alpha-beta search | Local GPU | Done |
 | 5v2 | NNUE + TD(lambda) | TD learning + BCE + 692 features, pure NNUE eval | Local GPU | Done |
-| 5v3 | NNUE Self-Improve | Self-play iteration with v2 engine (did not surpass v2) | Local GPU | Done |
-| 6 | NNUE + Search Enhancement | Deeper search (NMP, LMR, aspiration) + human data | Local GPU | TODO |
+| 5v3 | NNUE Self-Improve | Self-play iteration / human data mixing (did not surpass v2) | Local GPU | Done |
+| 6 | NNUE + Search Enhancement | Deeper search (NMP, LMR, aspiration windows) | Local GPU | TODO |
 
 ## Benchmark Opponents
 
@@ -748,11 +748,11 @@ Eval = **100% NNUE** (no material blending).
 
 ---
 
-## Candidate 5 v3: NNUE Self-Improvement Iteration
+## Candidate 5 v3: NNUE Data Experiments
 
 ### Idea
 
-Use the v2 engine to generate new self-play data, then retrain with the same TD(lambda) pipeline. If the self-improvement loop works, v3 should be stronger than v2 because it learns from higher-quality games.
+Can we improve v2 by changing the training data? Five experiments systematically tested: (A) retraining on v2's own self-play data, (B) mixing v1+v2 self-play data, (C) adding human game data to self-play, (D) training on human data alone, and (E) mixing 90% self-play + 10% human. All used the same TD(lambda) pipeline and architecture as v2.
 
 ### Experiments
 
@@ -784,15 +784,70 @@ Use the v2 engine to generate new self-play data, then retrain with the same TD(
 
 **Result:** Regression — back to v1-level performance vs minimax-d3 (50% vs v2's 100%). The weaker v1 data diluted the stronger v2 signals.
 
+**Experiment C: v1 self-play + human data (571K + 208K = 779K positions)**
+
+- Scored 5K human games (DhtmlXQ format) with v2 engine at depth 4
+- Raw: 5000 games, 349K positions. Cleaned to 4232 games, 208K positions after filtering:
+  - Removed endgame puzzles (missing kings in initial position, <20 pieces)
+  - Truncated at first position where any king disappears (king capture in game records)
+  - Removed games with <10 positions after truncation
+- Combined with v1 self-play (571K positions) via symlinks
+- Training: 30 epochs, best val BCE = 0.5857, sign accuracy = 98.3%
+
+| Opponent | v3c Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 10 | 0 | 10 | **50%** |
+
+**Result:** Regression — 50% vs minimax-d3, same as mixing self-play sources. Human data has a more bimodal score distribution (40% extreme scores vs 26% in self-play), creating conflicting training signals.
+
+**Experiment D: Human data only (208K clean positions)**
+
+- Same cleaned human data as Experiment C, trained in isolation
+- Hypothesis: human data alone (without mixing) might carry useful positional knowledge
+- Training: 30 epochs, best val BCE = 0.6164, sign accuracy = 96.1%
+
+| Opponent | v3d Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 0 | 0 | 20 | **50%** |
+
+**Result:** All draws vs minimax-d3 — same as NNUE v1. The human-scored data simply doesn't teach sharp enough position evaluation. Val BCE (0.6164) much worse than v2's (0.568), sign accuracy dropped from 99.8% to 96.1%.
+
+**Experiment E: 90% v1 self-play + 10% human (571K + 63K = 635K positions)**
+
+- Subsampled 63K human positions (30.6% of clean data) to achieve exact 90/10 ratio
+- Hypothesis: maybe full 50/50 mix was too much human data — a small amount might help without hurting
+- Training: 30 epochs, best val BCE = 0.5877, sign accuracy = 95.4%
+
+| Opponent | v3e Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 0 | 0 | 20 | **50%** |
+
+**Result:** All draws — even 10% human data causes full regression from v2's 100% wins. The contamination threshold is very low.
+
 ### Analysis
 
-The self-improvement iteration did **not** produce a stronger model:
+The v3 experiments systematically tested every data combination. **None surpassed v2.**
 
-1. **v3 (v2-only data):** Matched v2 vs minimax-d3 but lost ground vs minimax-d4. The v2 engine's self-play data doesn't contain enough new information beyond what v2 already learned — the model is essentially learning to replicate itself.
+| Experiment | Data | Val BCE | Sign Acc | vs Minimax-d3 |
+|---|---|---|---|---|
+| **v2 (baseline)** | **v1 self-play (339K)** | **0.568** | **99.8%** | **100% (50W/0L/0D)** |
+| v3a (v2 self-play) | v2 self-play (334K) | 0.551 | 99.7% | 100% (but 50% vs d4 ↓) |
+| v3b (mixed engines) | v1+v2 self-play (685K) | 0.575 | 99.5% | 50% (25W/0L/25D) |
+| v3c (sp + human) | v1 sp + human (779K) | 0.586 | 98.3% | 50% (10W/0L/10D) |
+| v3d (human only) | human only (208K) | 0.616 | 96.1% | 50% (0W/0L/20D) |
+| v3e (90/10 mix) | 90% v1 sp + 10% human (635K) | 0.588 | 95.4% | 50% (0W/0L/20D) |
 
-2. **v3 (mixed data):** Mixing weaker v1 data actively hurt performance. The v1 engine (with material blending) generates positions evaluated from a fundamentally different perspective than v2 (pure NNUE). The model learns a compromise that's worse than either.
+**Key findings:**
 
-3. **Why self-improvement stalled:** The v2 engine at depth 4 plays deterministic (within epsilon noise) games against itself. The training data captures v2's existing knowledge but not new knowledge. To break through, we likely need either: (a) deeper search (depth 5-6) to generate higher-quality targets, (b) fundamentally different positions (e.g., from human games or different opening books), or (c) search enhancements (null-move pruning, LMR) that increase effective search depth without more compute.
+1. **Self-play replication (v3a):** Training on v2's own self-play data reproduces v2-level play but doesn't improve it. The self-play data captures existing knowledge, not new knowledge.
+
+2. **Data mixing is destructive (v3b):** Combining data from engines with different eval philosophies (v1 material-blended vs v2 pure NNUE) creates conflicting training signals. The model learns a compromise worse than either source.
+
+3. **Human data is poison for this pipeline (v3c-e):** Whether mixed (50%, 10%) or isolated (100%), engine-scored human positions consistently degrade model quality. The root cause is **distribution mismatch**: self-play positions come from games where the same engine both plays and evaluates — there's perfect consistency between position distribution and score distribution. Human games break this consistency. The engine assigns scores to positions it would never reach through its own play, creating noisy labels.
+
+4. **Sign accuracy is the key metric:** Every experiment that reduced sign accuracy below ~99% also failed the game benchmark. The v2 baseline's 99.8% sign accuracy appears to be the critical threshold for winning games rather than drawing them.
+
+**Conclusion:** To surpass v2, we cannot simply add more data or different data sources. The breakthrough must come from **deeper or more efficient search** — either increasing literal search depth or implementing search enhancements (NMP, LMR, aspiration windows) that achieve greater effective depth at the same time budget.
 
 ---
 
@@ -802,39 +857,62 @@ The self-improvement iteration did **not** produce a stronger model:
 
 Candidate 4 (6 versions) proved that AlphaZero's MCTS self-improvement loop doesn't work at local scale (1 GPU, <500 sims, 1.9M params). Meanwhile, NNUE v2 with traditional alpha-beta search achieved 100% vs minimax-d3 using only 98K parameters and 30 seconds of training. The evidence is clear: **NNUE + alpha-beta is the right architecture for Xiangqi on local hardware.**
 
-Candidate 5 v3 showed that naive self-improvement (re-training on self-play data at the same depth) stalls — the model replicates itself but doesn't improve. To break through, we need to increase the *quality* of information the model sees, not just the quantity.
+Candidate 5 v3 showed that neither self-improvement iteration nor human data can surpass v2. Five experiments (v3a-e) systematically tested every data combination — self-play replication, data mixing, human data in isolation, and 90/10 blending — all failed to improve on v2's 100% win rate vs minimax-d3. The breakthrough must come from **search quality**, not data quantity.
 
 ### Idea
 
-Two directions to push NNUE v2 further:
+**Direction A: Stronger Search (same eval)** — the only remaining viable path
 
-**Direction A: Stronger Search (same eval)**
 - **Null-move pruning (NMP)**: Skip a turn and search at reduced depth — if the position is still good, prune the branch. Gives ~1 ply free depth.
 - **Late move reductions (LMR)**: Moves ordered late (unlikely to be good) searched at reduced depth first. Gives another ~0.5-1 ply.
 - **Aspiration windows**: Start alpha-beta with a narrow window around the expected score, re-search if it falls outside. Speeds up search significantly.
 - **Killer moves + history heuristic**: Better move ordering = more pruning = deeper effective search.
 - **Target**: Reach effective depth 6-7 with the same time budget as current depth 4.
 
-**Direction B: Better Eval (external knowledge)**
-- **Human game data**: Train on 11M positions from 162K human games (we already have this data from Candidate 4). Human games contain positional patterns that self-play at depth 4 can never discover.
-- **Multi-source training**: Combine search-bootstrapped targets (TD-lambda from self-play) with supervised targets (human game outcomes). The search targets teach tactical accuracy, human targets teach strategic understanding.
-- **Larger network**: If search is fast enough, we can afford a slightly larger NNUE (e.g., 256 accumulator, 64 hidden) without bottlenecking the search.
+**Direction B: ~~Better Eval (external knowledge)~~ RULED OUT by v3 experiments**
+
+v3 experiments conclusively showed that human data hurts rather than helps — whether mixed (50%, 10%) or trained in isolation. The root cause is distribution mismatch: engine-scored human positions create noisy labels because the engine evaluates positions it would never reach through its own play. See Insight #10 for full analysis.
 
 ### Training Plan
 
 1. Implement search enhancements in C++ engine (NMP, LMR, aspiration, killer moves)
 2. Benchmark v2 eval at effective depth 6-7 — see if deeper search alone beats minimax-d4
 3. Generate new self-play data at higher effective depth (richer targets)
-4. Optionally mix with human game data for positional knowledge
-5. Retrain NNUE and benchmark
+4. Retrain NNUE on deeper-search self-play data and benchmark
 
 ### Benchmark vs Game AIs
 
+**Experiment A: v2 self-play data only (3k games, 334K pos)**
+
 | Opponent | NNUE v3 Wins | Opponent Wins | Draws | Score |
 |---|---|---|---|---|
-| Minimax (d=3) | | | | |
-| Minimax (d=4) | | | | |
-| NNUE v2 (d=4) | | | | |
+| Minimax (d=3) | 50 | 0 | 0 | 100% |
+| Minimax (d=4) | 0 | 0 | 20 | 50% ↓ |
+| NNUE v2 (d=4) | 0 | 0 | 20 | 50% |
+
+**Experiment B: mixed v1 + v2 self-play (6k games, 685K pos)**
+
+| Opponent | NNUE v3 Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 25 | 0 | 25 | 50% ↓↓ |
+
+**Experiment C: v1 self-play + human data (571K + 208K = 779K pos)**
+
+| Opponent | NNUE v3 Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 10 | 0 | 10 | 50% ↓↓ |
+
+**Experiment D: human data only (208K clean positions)**
+
+| Opponent | NNUE v3 Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 0 | 0 | 20 | 50% (all draws) |
+
+**Experiment E: 90% v1 self-play + 10% human (571K + 63K = 635K pos)**
+
+| Opponent | NNUE v3 Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3) | 0 | 0 | 20 | 50% (all draws) |
 
 ---
 
@@ -855,8 +933,11 @@ Two directions to push NNUE v2 further:
 | 4v6. AlphaZero (material draw) | 0W, 50% best (failed) | — | — |
 | **5. NNUE (depth 4)** | **79W/0L/21D (89.5%)** | **50W/0L/50D (75%)** | **0W/0L/20D (50%)** |
 | **5v2. NNUE+TD (depth 4)** | — | — | **50W/0L/0D (100%)** |
-| 5v3. NNUE self-improve (v2 data) | — | — | 50W/0L/0D (100%) vs d3, 0W/0L/20D (50%) vs d4 |
-| 5v3. NNUE self-improve (mixed) | — | — | 25W/0L/25D (50%) vs d3 — regression |
+| 5v3a. NNUE self-improve (v2 data) | — | — | 50W/0L/0D (100%) vs d3, 0W/0L/20D (50%) vs d4 |
+| 5v3b. NNUE self-improve (mixed v1+v2) | — | — | 25W/0L/25D (50%) vs d3 — regression |
+| 5v3c. NNUE (v1 self-play + human) | — | — | 10W/0L/10D (50%) vs d3 — regression |
+| 5v3d. NNUE (human only, 208K pos) | — | — | 0W/0L/20D (50%) vs d3 — v1-level |
+| 5v3e. NNUE (90% sp + 10% human) | — | — | 0W/0L/20D (50%) vs d3 — v1-level |
 | 6. NNUE + Search Enhancement | — | — | TODO |
 
 ---
@@ -1007,12 +1088,17 @@ v3 attempted to improve on v2 by using v2's own engine to generate self-play dat
 | Experiment | Data | vs Minimax-d3 | vs Minimax-d4 | vs v2 |
 |---|---|---|---|---|
 | v2 (baseline) | 3k v1-engine games, 339K pos | **100%** | **75%** | — |
-| v3 (v2 data only) | 3k v2-engine games, 334K pos | 100% | 50% ↓ | 0-0-20 |
-| v3 (mixed v1+v2) | 6k games, 685K pos | 50% ↓↓ | — | 0-0-20 |
+| v3a (v2 data only) | 3k v2-engine games, 334K pos | 100% | 50% ↓ | 0-0-20 |
+| v3b (mixed v1+v2) | 6k games, 685K pos | 50% ↓↓ | — | 0-0-20 |
+| v3c (v1 + human) | 571K + 208K = 779K pos | 50% ↓↓ | — | — |
+| v3d (human only) | 208K clean human pos | 50% (all draws) | — | — |
+| v3e (90% sp + 10% human) | 571K sp + 63K human = 635K | 50% (all draws) | — | — |
 
 - **v2-only data:** The model learns to replicate v2 but doesn't surpass it. The self-play data captures v2's existing knowledge, not new knowledge. Performance vs minimax-d4 actually regressed (75% → 50%).
-- **Mixed data:** Adding weaker v1 data actively hurt. The v1 engine (material-blended) and v2 engine (pure NNUE) evaluate positions from fundamentally different perspectives — mixing creates conflicting training signals.
-- **Takeaway:** Self-improvement requires new information the current model doesn't have. At fixed search depth, the engine generates games within its existing capability. To break through, we need either: (a) deeper search to discover longer tactical combinations, (b) search enhancements (null-move pruning, LMR) for greater effective depth, or (c) external knowledge (human games, opening books) to introduce positions outside the engine's experience.
+- **Mixed self-play data:** Adding weaker v1 data actively hurt. The v1 engine (material-blended) and v2 engine (pure NNUE) evaluate positions from fundamentally different perspectives — mixing creates conflicting training signals.
+- **Human data mixing (v3c):** Scored 5K human games with v2 engine at depth 4, cleaned to 4232 games (208K positions). Combined with v1 self-play (571K positions) and retrained. Result: 50% vs minimax-d3 — same regression as mixed self-play. Human game positions have a more bimodal score distribution (40% extreme scores vs 26% in self-play), suggesting distribution mismatch hurts more than external knowledge helps.
+- **Human data only (v3d):** Trained on 208K clean human positions alone. Val BCE 0.6164 (vs v2's 0.58), sign accuracy 96.1% (vs v2's 99.8%). Result: 0W/0L/20D vs minimax-d3 — all draws, same as NNUE v1. The human data simply doesn't teach sharp enough position evaluation. The model sees positions from the middle of complete games, but the engine-assigned scores at depth 4 lack the consistency of self-play data where the same engine both plays and evaluates.
+- **Takeaway:** Self-improvement requires new information the current model doesn't have, but human data is not the answer at this stage. Whether mixed or isolated, human-scored data produces weaker models than v1's self-play data. The v1 self-play data works because the engine that generates the data and the engine that scores it are the same — there's perfect consistency between position distribution and evaluation. Human games break this consistency. To break through v2, we need: (a) deeper search to discover longer tactical combinations, or (b) search enhancements (null-move pruning, LMR) for greater effective depth at the same wall-clock cost.
 
 ### Current Best: NNUE v2 (Candidate 5v2)
 
@@ -1070,3 +1156,7 @@ v3 attempted to improve on v2 by using v2's own engine to generate self-play dat
 | 2026-03-21 | Candidate 5 v3 (v2 data): 3k v2 self-play games, TD(lambda) training | 99.7% sign acc, 100% vs d3, 50% vs d4 (regression from v2's 75%), 0-0-20 vs v2 |
 | 2026-03-21 | Candidate 5 v3 (mixed): 5k v1 + 1k v2 games combined | 99.5% sign acc, 50% vs d3 (regression to v1-level). Weaker v1 data dilutes v2 signal |
 | 2026-03-21 | v3 vs v2 head-to-head (20 games, depth 4) | 0-0-20 all draws. Self-improvement iteration did not produce a stronger model |
+| 2026-03-21 | Human data pipeline: score 5K games with v2 engine (depth 4) | 349K raw positions → cleaned to 4232 games, 208K positions (filtered endgame puzzles, missing kings, short games) |
+| 2026-03-21 | v3c: Train on v1 self-play (571K) + clean human (208K) = 779K positions | val BCE 0.5857, sign acc 98.3%. vs minimax-d3: 10W/0L/10D (50%) — regression from v2's 100% |
+| 2026-03-21 | v3d: Train on human data only (208K clean positions) | val BCE 0.6164, sign acc 96.1%. vs minimax-d3: 0W/0L/20D (50%, all draws) — v1-level performance |
+| 2026-03-21 | v3e: 90% v1 self-play + 10% human (571K + 63K = 635K pos) | val BCE 0.5877, sign acc 95.4%. vs minimax-d3: 0W/0L/20D — even 10% human data causes full regression |

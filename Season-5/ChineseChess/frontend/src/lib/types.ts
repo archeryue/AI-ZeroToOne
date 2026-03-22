@@ -34,6 +34,6 @@ export interface ErrorData {
 
 export interface CreateGameOptions {
   player_color: "red" | "black";
-  ai_type: "random" | "greedy" | "minimax" | "human";
+  ai_type: "random" | "greedy" | "minimax" | "nnue" | "human";
   ai_depth?: number;
 }
