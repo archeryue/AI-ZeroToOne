@@ -15,6 +15,7 @@ Train an AI to play Chinese Chess (Xiangqi) using RL and supervised learning. We
 | 5 | NNUE | Supervised NN eval + alpha-beta search | Local GPU | Done |
 | 5v2 | NNUE + TD(lambda) | TD learning + BCE + 692 features, pure NNUE eval | Local GPU | Done |
 | 5v3 | NNUE Self-Improve | Self-play iteration / human data mixing (did not surpass v2) | Local GPU | Done |
+| 5v4 | NNUE High-Noise | 3x noise in v1 self-play — matches v2 on metrics but loses 0-20 h2h | Local GPU | Done |
 | 6 | NNUE + Search Enhancement | Deeper search (NMP, LMR, aspiration windows) | Local GPU | TODO |
 
 ## Benchmark Opponents
@@ -851,6 +852,52 @@ The v3 experiments systematically tested every data combination. **None surpasse
 
 ---
 
+## Candidate 5 v4: NNUE High-Noise Self-Play
+
+### Idea
+
+Test whether **noise/diversity is the key factor** in v2's training data quality. v2 used moderate epsilon-greedy noise during v1-engine self-play. What happens if we crank it up significantly?
+
+### Noise Comparison
+
+| Phase | v2 (baseline) | v4 (high noise) |
+|---|---|---|
+| Opening (random moves) | Moves 1-6 | Moves 1-10 |
+| Mid-game epsilon | 0.15 (moves 7-16) | 0.30 (moves 11-30) |
+| Late-game epsilon | 0.05 (moves 17+) | 0.15 (moves 31+) |
+
+### Data Generation
+
+- v1 NNUE engine self-play at depth 4, same as v2 but with 3x noise
+- 5000 games → 502K positions (vs v2's 3000 games → 339K positions)
+- W/L/D = 1785/2575/640 (36%/51%/13%) — fewer draws than v2 (13% vs 25%) because noise creates more decisive positions
+- Generation time: 3598s (1.4 games/s, 12 workers)
+
+### Training
+
+- Same TD(lambda=0.8) + BCE pipeline as v2
+- 30 epochs, best val BCE = 0.5723, sign accuracy = 99.8%
+- Training metrics **match v2** almost exactly (v2: BCE 0.568, sign acc 99.8%)
+
+### Benchmark
+
+| Opponent | v4 Wins | Opponent Wins | Draws | Score |
+|---|---|---|---|---|
+| Minimax (d=3, 50g) | 50 | 0 | 0 | **100%** |
+| Minimax (d=4, 20g) | 10 | 0 | 10 | **75%** |
+| **v2 (depth 4, 20g)** | **0** | **20** | **0** | **0%** |
+| **v2 (reverse, 20g)** | **0** | **20** | **0** | **0%** |
+
+### Analysis
+
+**The metrics lie.** v4 matches v2 on every training metric (val BCE, sign accuracy) and every weak-opponent benchmark (100% vs d3, 75% vs d4). But in head-to-head play, **v2 demolishes v4 40-0 across both color sides**.
+
+This reveals that benchmarks against weak opponents are insufficient — two models can look identical against minimax but have vastly different positional understanding. The high-noise data creates diverse but **unrealistic** positions that the engine would never encounter in actual play. The model learns to evaluate a wide range of positions adequately but none of them deeply.
+
+**Key insight: noise is not the key differentiator.** v2's strength comes from the *right amount* of noise — enough diversity to prevent overfitting, but positions stay close to what the engine actually encounters during real games. More noise = more diverse but less representative training data = weaker positional understanding against a strong opponent.
+
+---
+
 ## Candidate 6: NNUE + Search Enhancement (TODO)
 
 ### Why Not AlphaZero?
@@ -938,6 +985,7 @@ v3 experiments conclusively showed that human data hurts rather than helps — w
 | 5v3c. NNUE (v1 self-play + human) | — | — | 10W/0L/10D (50%) vs d3 — regression |
 | 5v3d. NNUE (human only, 208K pos) | — | — | 0W/0L/20D (50%) vs d3 — v1-level |
 | 5v3e. NNUE (90% sp + 10% human) | — | — | 0W/0L/20D (50%) vs d3 — v1-level |
+| 5v4. NNUE (high-noise self-play) | — | — | 100% vs d3, 75% vs d4 — but **0-40 vs v2** |
 | 6. NNUE + Search Enhancement | — | — | TODO |
 
 ---
@@ -1093,12 +1141,31 @@ v3 attempted to improve on v2 by using v2's own engine to generate self-play dat
 | v3c (v1 + human) | 571K + 208K = 779K pos | 50% ↓↓ | — | — |
 | v3d (human only) | 208K clean human pos | 50% (all draws) | — | — |
 | v3e (90% sp + 10% human) | 571K sp + 63K human = 635K | 50% (all draws) | — | — |
+| **v4 (high noise)** | **5k v1-engine games, 502K pos (3x eps)** | **100%** | **75%** | **0-40 (lost all)** |
 
 - **v2-only data:** The model learns to replicate v2 but doesn't surpass it. The self-play data captures v2's existing knowledge, not new knowledge. Performance vs minimax-d4 actually regressed (75% → 50%).
 - **Mixed self-play data:** Adding weaker v1 data actively hurt. The v1 engine (material-blended) and v2 engine (pure NNUE) evaluate positions from fundamentally different perspectives — mixing creates conflicting training signals.
 - **Human data mixing (v3c):** Scored 5K human games with v2 engine at depth 4, cleaned to 4232 games (208K positions). Combined with v1 self-play (571K positions) and retrained. Result: 50% vs minimax-d3 — same regression as mixed self-play. Human game positions have a more bimodal score distribution (40% extreme scores vs 26% in self-play), suggesting distribution mismatch hurts more than external knowledge helps.
 - **Human data only (v3d):** Trained on 208K clean human positions alone. Val BCE 0.6164 (vs v2's 0.58), sign accuracy 96.1% (vs v2's 99.8%). Result: 0W/0L/20D vs minimax-d3 — all draws, same as NNUE v1. The human data simply doesn't teach sharp enough position evaluation. The model sees positions from the middle of complete games, but the engine-assigned scores at depth 4 lack the consistency of self-play data where the same engine both plays and evaluates.
 - **Takeaway:** Self-improvement requires new information the current model doesn't have, but human data is not the answer at this stage. Whether mixed or isolated, human-scored data produces weaker models than v1's self-play data. The v1 self-play data works because the engine that generates the data and the engine that scores it are the same — there's perfect consistency between position distribution and evaluation. Human games break this consistency. To break through v2, we need: (a) deeper search to discover longer tactical combinations, or (b) search enhancements (null-move pruning, LMR) for greater effective depth at the same wall-clock cost.
+- **High-noise data (v4):** 3x epsilon-greedy noise produces a model that looks identical to v2 on every metric (val BCE, sign accuracy, vs minimax-d3, vs minimax-d4) but **loses 0-40 head-to-head against v2**. This proves that weak-opponent benchmarks are insufficient — models can look equivalent on aggregate metrics while having vastly different positional understanding. The right amount of noise matters: enough for diversity, but positions must stay realistic to what the engine encounters in actual play.
+
+### 11. Weak-Opponent Benchmarks Can Be Misleading
+
+v4 (high-noise) vs v2 (baseline) is the clearest example:
+
+| Metric | v2 | v4 | Verdict |
+|---|---|---|---|
+| Val BCE | 0.568 | 0.572 | ≈ equal |
+| Sign accuracy | 99.8% | 99.8% | equal |
+| vs Minimax-d3 | 100% | 100% | equal |
+| vs Minimax-d4 | 75% | 75% | equal |
+| **Head-to-head** | — | **0-40** | **v2 dominates** |
+
+Against weak opponents (minimax), both models are "good enough" to win/draw. The difference only shows when they play each other. This has important implications:
+- **Always include head-to-head benchmarks** when comparing model variants
+- **Training metrics (BCE, sign accuracy) don't predict playing strength** beyond a threshold
+- **Data quality > data quantity**: v4 had 50% more data and identical metrics, but worse actual play
 
 ### Current Best: NNUE v2 (Candidate 5v2)
 
@@ -1160,3 +1227,5 @@ v3 attempted to improve on v2 by using v2's own engine to generate self-play dat
 | 2026-03-21 | v3c: Train on v1 self-play (571K) + clean human (208K) = 779K positions | val BCE 0.5857, sign acc 98.3%. vs minimax-d3: 10W/0L/10D (50%) — regression from v2's 100% |
 | 2026-03-21 | v3d: Train on human data only (208K clean positions) | val BCE 0.6164, sign acc 96.1%. vs minimax-d3: 0W/0L/20D (50%, all draws) — v1-level performance |
 | 2026-03-21 | v3e: 90% v1 self-play + 10% human (571K + 63K = 635K pos) | val BCE 0.5877, sign acc 95.4%. vs minimax-d3: 0W/0L/20D — even 10% human data causes full regression |
+| 2026-03-21 | v4: High-noise v1 self-play (5K games, 502K pos, 3x epsilon) | val BCE 0.5723, sign acc 99.8%. 100% vs d3, 75% vs d4 — identical to v2 on metrics |
+| 2026-03-21 | v4 vs v2 head-to-head (40 games, depth 4) | **0-40** (v2 wins all from both sides). Metrics match but high noise weakens positional play |
