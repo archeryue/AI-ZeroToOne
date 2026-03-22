@@ -38,21 +38,60 @@ All candidates are evaluated against 3 AIs from `ChineseChess/backend/ai/`:
 
 ```
 ChessRL/
-├── env/                        # Gymnasium environment wrapper
-│   ├── chess_env.py            # ChineseChessEnv (obs, action, reward, masking)
-│   ├── observation.py          # Board → (15, 10, 9) tensor encoding
-│   └── action_space.py         # Move ↔ action index (8100 total)
+├── env/                              # Gymnasium environment wrapper
+│   ├── chess_env.py                  # ChineseChessEnv (obs, action, reward, masking)
+│   ├── observation.py                # Board → (15, 10, 9) tensor encoding
+│   ├── action_space.py               # Move ↔ action index (8100 total)
+│   └── reward_shaping.py             # Material-based reward (Candidates 2-3)
 ├── agents/
-│   ├── model.py                # CNN Actor-Critic (Candidates 1-3)
-│   ├── ppo_agent.py            # PPO agent with action masking
-│   └── alphazero/              # AlphaZero agent (Candidates 4-5)
-│       ├── network.py          # ResNet policy-value network
-│       └── mcts.py             # Monte Carlo Tree Search
+│   ├── model.py                      # CNN Actor-Critic (Candidates 1-3)
+│   ├── ppo_agent.py                  # PPO agent with action masking
+│   └── alphazero/                    # AlphaZero agent (Candidate 4)
+│       ├── network.py                # ResNet policy-value network
+│       └── mcts.py                   # Monte Carlo Tree Search
+├── engine_c/                         # C++ game engine (pybind11, 234x speedup)
+│   ├── xiangqi.h / xiangqi.cpp       # Board, Game, move gen, rules
+│   ├── nnue_search.h                 # NNUE v1 alpha-beta search (material blend)
+│   ├── nnue_search_v2.h              # NNUE v2 alpha-beta search (pure NNUE)
+│   ├── bindings.cpp                  # Python bindings
+│   └── setup.py                      # Build script
 ├── training/
-│   ├── train_ppo.py            # Self-play PPO training (Candidate 1)
-│   └── evaluate_vs_minimax.py  # Evaluation script (all opponents)
+│   ├── train_ppo.py                  # PPO self-play (Candidate 1)
+│   ├── train_ppo_v2.py               # PPO + reward shaping (Candidate 2)
+│   ├── train_ppo_v3.py               # PPO + curriculum (Candidate 3)
+│   ├── train_alphazero.py            # AlphaZero self-play (Candidate 4)
+│   ├── parse_games.py                # DhtmlXQ human game parser
+│   ├── pretrain_supervised.py        # Supervised pre-training on human games
+│   ├── evaluate_vs_minimax.py        # Evaluation script (all opponents)
+│   ├── candidate5/                   # NNUE v1: supervised on human games
+│   │   ├── nnue_net.py               # 1260-feature NNUE architecture
+│   │   ├── train_nnue.py             # MSE training on game outcomes
+│   │   ├── export_weights.py         # PyTorch → C++ binary export
+│   │   ├── eval_nnue.py              # Benchmark script
+│   │   └── checkpoints/              # v1 weights (.pt + .bin)
+│   ├── candidate5_v2/                # NNUE v2: TD(lambda) + BCE (best model)
+│   │   ├── nnue_net_v2.py            # 692-feature NNUE architecture
+│   │   ├── gen_td_data.py            # Self-play data generation (v1 engine)
+│   │   ├── train_nnue_v2.py          # TD(lambda=0.8) + BCE training
+│   │   ├── export_weights_v2.py      # Weight export
+│   │   ├── eval_nnue_v2.py           # Benchmark (vs random/greedy/minimax)
+│   │   ├── td_data/                  # 3K self-play games, 339K positions
+│   │   └── checkpoints/              # v2 weights (best model)
+│   ├── candidate5_v3/                # v3 data experiments (all failed)
+│   │   ├── gen_td_data.py            # v2-engine self-play data gen
+│   │   ├── gen_human_scored_data.py  # Score human games with NNUE engine
+│   │   ├── td_data_human/            # 5K raw human games, 349K positions
+│   │   ├── td_data_human_clean/      # Cleaned: 4232 games, 208K positions
+│   │   ├── td_data_v3/               # v1 sp + human combined (symlinks)
+│   │   ├── td_data_v3_90_10/         # 90% sp + 10% human (symlinks)
+│   │   └── checkpoints_*/            # v3a-e experiment weights
+│   └── candidate5_v4/                # v4 high-noise experiment
+│       ├── gen_td_data_noisy.py      # 3x epsilon noise self-play gen
+│       ├── td_data_noisy/            # 5K noisy games, 502K positions
+│       └── checkpoints_full/         # v4 weights (matches v2 metrics, loses h2h)
+├── data/                             # Human game data (DhtmlXQ format)
 └── serve/
-    └── model_server.py         # Integration with ChineseChess backend
+    └── model_server.py               # Integration with ChineseChess backend
 ```
 
 ## Environment Design
