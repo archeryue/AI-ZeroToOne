@@ -15,6 +15,7 @@ export default function Home() {
   const [aiType, setAiType] = useState<string>("greedy");
   const [playerColor, setPlayerColor] = useState<"red" | "black">("red");
   const [aiDepth, setAiDepth] = useState(3);
+  const [flipped, setFlipped] = useState(false);
 
   const { gameState, connected, aiThinking, error, sendMove, sendUndo, sendResign } =
     useGameSocket(gameId);
@@ -29,6 +30,7 @@ export default function Home() {
       const result = await createGame(options);
       setGameId(result.game_id);
       setSelectedPos(null);
+      setFlipped(playerColor === "black");
     } catch (e) {
       console.error("Failed to create game:", e);
     }
@@ -193,6 +195,7 @@ export default function Home() {
             gameState={gameState}
             selectedPos={selectedPos}
             onCellClick={handleCellClick}
+            flipped={flipped}
           />
         </div>
 
@@ -206,6 +209,7 @@ export default function Home() {
             }}
             onUndo={handleUndo}
             onResign={handleResign}
+            onFlipBoard={() => setFlipped((f) => !f)}
             gameOver={gameOver}
           />
           <div>

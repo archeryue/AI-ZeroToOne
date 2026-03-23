@@ -9,114 +9,83 @@ interface BoardProps {
   gameState: GameState;
   selectedPos: [number, number] | null;
   onCellClick: (row: number, col: number) => void;
+  flipped?: boolean;
 }
 
-function toX(col: number) {
+function toX(col: number, flipped: boolean) {
+  const c = flipped ? (COLS - 1 - col) : col;
+  return BOARD_PADDING + c * CELL_SIZE;
+}
+
+function toY(row: number, flipped: boolean) {
+  const r = flipped ? (ROWS - 1 - row) : row;
+  return BOARD_PADDING + r * CELL_SIZE;
+}
+
+function vx(col: number) {
   return BOARD_PADDING + col * CELL_SIZE;
 }
 
-function toY(row: number) {
+function vy(row: number) {
   return BOARD_PADDING + row * CELL_SIZE;
 }
 
 function GridLines() {
   const lines: React.ReactElement[] = [];
 
-  // Horizontal lines
   for (let r = 0; r < ROWS; r++) {
     lines.push(
-      <line
-        key={`h-${r}`}
-        x1={toX(0)}
-        y1={toY(r)}
-        x2={toX(COLS - 1)}
-        y2={toY(r)}
-        stroke="#5D4037"
-        strokeWidth={1}
-      />
+      <line key={`h-${r}`} x1={vx(0)} y1={vy(r)} x2={vx(COLS - 1)} y2={vy(r)} stroke="#5D4037" strokeWidth={1} />
     );
   }
 
-  // Vertical lines (top half)
   for (let c = 0; c < COLS; c++) {
     lines.push(
-      <line
-        key={`vt-${c}`}
-        x1={toX(c)}
-        y1={toY(0)}
-        x2={toX(c)}
-        y2={toY(4)}
-        stroke="#5D4037"
-        strokeWidth={1}
-      />
+      <line key={`vt-${c}`} x1={vx(c)} y1={vy(0)} x2={vx(c)} y2={vy(4)} stroke="#5D4037" strokeWidth={1} />
     );
   }
 
-  // Vertical lines (bottom half)
   for (let c = 0; c < COLS; c++) {
     lines.push(
-      <line
-        key={`vb-${c}`}
-        x1={toX(c)}
-        y1={toY(5)}
-        x2={toX(c)}
-        y2={toY(9)}
-        stroke="#5D4037"
-        strokeWidth={1}
-      />
+      <line key={`vb-${c}`} x1={vx(c)} y1={vy(5)} x2={vx(c)} y2={vy(9)} stroke="#5D4037" strokeWidth={1} />
     );
   }
 
-  // Left and right border through the river
   lines.push(
-    <line
-      key="border-l"
-      x1={toX(0)}
-      y1={toY(4)}
-      x2={toX(0)}
-      y2={toY(5)}
-      stroke="#5D4037"
-      strokeWidth={1}
-    />
+    <line key="border-l" x1={vx(0)} y1={vy(4)} x2={vx(0)} y2={vy(5)} stroke="#5D4037" strokeWidth={1} />
   );
   lines.push(
-    <line
-      key="border-r"
-      x1={toX(8)}
-      y1={toY(4)}
-      x2={toX(8)}
-      y2={toY(5)}
-      stroke="#5D4037"
-      strokeWidth={1}
-    />
+    <line key="border-r" x1={vx(8)} y1={vy(4)} x2={vx(8)} y2={vy(5)} stroke="#5D4037" strokeWidth={1} />
   );
 
-  // Palace diagonal lines (Black palace: rows 0-2, cols 3-5)
   lines.push(
-    <line key="pd-b1" x1={toX(3)} y1={toY(0)} x2={toX(5)} y2={toY(2)} stroke="#5D4037" strokeWidth={1} />
+    <line key="pd-b1" x1={vx(3)} y1={vy(0)} x2={vx(5)} y2={vy(2)} stroke="#5D4037" strokeWidth={1} />
   );
   lines.push(
-    <line key="pd-b2" x1={toX(5)} y1={toY(0)} x2={toX(3)} y2={toY(2)} stroke="#5D4037" strokeWidth={1} />
+    <line key="pd-b2" x1={vx(5)} y1={vy(0)} x2={vx(3)} y2={vy(2)} stroke="#5D4037" strokeWidth={1} />
   );
 
-  // Palace diagonal lines (Red palace: rows 7-9, cols 3-5)
   lines.push(
-    <line key="pd-r1" x1={toX(3)} y1={toY(7)} x2={toX(5)} y2={toY(9)} stroke="#5D4037" strokeWidth={1} />
+    <line key="pd-r1" x1={vx(3)} y1={vy(7)} x2={vx(5)} y2={vy(9)} stroke="#5D4037" strokeWidth={1} />
   );
   lines.push(
-    <line key="pd-r2" x1={toX(5)} y1={toY(7)} x2={toX(3)} y2={toY(9)} stroke="#5D4037" strokeWidth={1} />
+    <line key="pd-r2" x1={vx(5)} y1={vy(7)} x2={vx(3)} y2={vy(9)} stroke="#5D4037" strokeWidth={1} />
   );
 
   return <>{lines}</>;
 }
 
-function RiverText() {
-  const y = (toY(4) + toY(5)) / 2;
+function RiverText({ flipped }: { flipped: boolean }) {
+  const visualY = BOARD_PADDING + 4 * CELL_SIZE + CELL_SIZE / 2;
+  const leftX = BOARD_PADDING + 1.5 * CELL_SIZE;
+  const rightX = BOARD_PADDING + 6.5 * CELL_SIZE;
+  const leftText = flipped ? "汉界" : "楚河";
+  const rightText = flipped ? "楚河" : "汉界";
   return (
     <>
       <text
-        x={toX(1.5)}
-        y={y + 2}
+        x={leftX}
+        y={visualY + 2}
         textAnchor="middle"
         dominantBaseline="central"
         fill="#5D4037"
@@ -125,11 +94,11 @@ function RiverText() {
         fontWeight="bold"
         style={{ userSelect: "none" }}
       >
-        楚河
+        {leftText}
       </text>
       <text
-        x={toX(6.5)}
-        y={y + 2}
+        x={rightX}
+        y={visualY + 2}
         textAnchor="middle"
         dominantBaseline="central"
         fill="#5D4037"
@@ -138,13 +107,13 @@ function RiverText() {
         fontWeight="bold"
         style={{ userSelect: "none" }}
       >
-        汉界
+        {rightText}
       </text>
     </>
   );
 }
 
-export default function Board({ gameState, selectedPos, onCellClick }: BoardProps) {
+export default function Board({ gameState, selectedPos, onCellClick, flipped = false }: BoardProps) {
   const { board, valid_moves } = gameState;
 
   // Get valid destinations for selected piece
@@ -189,22 +158,22 @@ export default function Board({ gameState, selectedPos, onCellClick }: BoardProp
       <GridLines />
 
       {/* River text */}
-      <RiverText />
+      <RiverText flipped={flipped} />
 
       {/* Last move highlight */}
       {lastMove && (
         <>
           <rect
-            x={toX(lastMove.from[1]) - CELL_SIZE / 2 + 4}
-            y={toY(lastMove.from[0]) - CELL_SIZE / 2 + 4}
+            x={toX(lastMove.from[1], flipped) - CELL_SIZE / 2 + 4}
+            y={toY(lastMove.from[0], flipped) - CELL_SIZE / 2 + 4}
             width={CELL_SIZE - 8}
             height={CELL_SIZE - 8}
             fill="rgba(255, 235, 59, 0.3)"
             rx={4}
           />
           <rect
-            x={toX(lastMove.to[1]) - CELL_SIZE / 2 + 4}
-            y={toY(lastMove.to[0]) - CELL_SIZE / 2 + 4}
+            x={toX(lastMove.to[1], flipped) - CELL_SIZE / 2 + 4}
+            y={toY(lastMove.to[0], flipped) - CELL_SIZE / 2 + 4}
             width={CELL_SIZE - 8}
             height={CELL_SIZE - 8}
             fill="rgba(255, 235, 59, 0.3)"
@@ -220,8 +189,8 @@ export default function Board({ gameState, selectedPos, onCellClick }: BoardProp
         return isCapture ? (
           <circle
             key={`valid-${dest}`}
-            cx={toX(c)}
-            cy={toY(r)}
+            cx={toX(c, flipped)}
+            cy={toY(r, flipped)}
             r={28}
             fill="none"
             stroke="rgba(76, 175, 80, 0.6)"
@@ -230,8 +199,8 @@ export default function Board({ gameState, selectedPos, onCellClick }: BoardProp
         ) : (
           <circle
             key={`valid-${dest}`}
-            cx={toX(c)}
-            cy={toY(r)}
+            cx={toX(c, flipped)}
+            cy={toY(r, flipped)}
             r={10}
             fill="rgba(76, 175, 80, 0.5)"
           />
@@ -243,8 +212,8 @@ export default function Board({ gameState, selectedPos, onCellClick }: BoardProp
         Array.from({ length: COLS }, (_, c) => (
           <rect
             key={`cell-${r}-${c}`}
-            x={toX(c) - CELL_SIZE / 2}
-            y={toY(r) - CELL_SIZE / 2}
+            x={toX(c, flipped) - CELL_SIZE / 2}
+            y={toY(r, flipped) - CELL_SIZE / 2}
             width={CELL_SIZE}
             height={CELL_SIZE}
             fill="transparent"
@@ -266,8 +235,8 @@ export default function Board({ gameState, selectedPos, onCellClick }: BoardProp
             <Piece
               key={`piece-${r}-${c}`}
               piece={piece}
-              x={toX(c)}
-              y={toY(r)}
+              x={toX(c, flipped)}
+              y={toY(r, flipped)}
               selected={isSelected}
               onClick={() => onCellClick(r, c)}
             />
