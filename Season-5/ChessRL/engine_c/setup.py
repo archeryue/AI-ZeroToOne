@@ -1,13 +1,20 @@
 """Build script for the C++ Chinese Chess engine."""
 
+import platform
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext
+
+compile_args = ["-O3", "-DNDEBUG", "-std=c++17"]
+if platform.machine() == "arm64":
+    compile_args.append("-mcpu=apple-m1")
+else:
+    compile_args.append("-march=native")
 
 ext_modules = [
     Pybind11Extension(
         "engine_c._xiangqi",
         ["xiangqi.cpp", "bindings.cpp"],
-        extra_compile_args=["-O3", "-march=native", "-DNDEBUG", "-std=c++17"],
+        extra_compile_args=compile_args,
         include_dirs=["."],
     ),
 ]

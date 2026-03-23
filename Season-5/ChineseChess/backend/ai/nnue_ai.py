@@ -4,6 +4,8 @@ Uses the NNUE v2 engine from ChessRL (Candidate 5v2).
 Requires the engine_c module to be built (pip install -e ChessRL/engine_c/).
 """
 
+from __future__ import annotations
+
 import sys
 import os
 from pathlib import Path
