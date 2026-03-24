@@ -160,14 +160,14 @@ export default function Home() {
                 <input
                   type="range"
                   min={1}
-                  max={4}
+                  max={5}
                   value={aiDepth}
                   onChange={(e) => setAiDepth(Number(e.target.value))}
                   className="w-full accent-amber-600"
                 />
                 <div className="flex justify-between text-xs text-stone-500">
                   <span>Easy (1)</span>
-                  <span>Hard (4)</span>
+                  <span>Hard (5)</span>
                 </div>
               </div>
             )}

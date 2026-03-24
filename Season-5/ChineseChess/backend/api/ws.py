@@ -50,12 +50,13 @@ async def game_websocket(websocket: WebSocket, game_id: str):
                     "data": session.to_state_dict(),
                 })
 
-                # AI response — run in thread so the player move flushes first
+                # AI response — yield so the player-move state flushes to the client
                 if (
                     session.ai
                     and session.game.status.value == "playing"
                     and session.game.current_turn == session.ai_color
                 ):
+                    await asyncio.sleep(0)  # yield to event loop so prior send flushes
                     await websocket.send_json({
                         "type": "ai_thinking",
                         "data": {},

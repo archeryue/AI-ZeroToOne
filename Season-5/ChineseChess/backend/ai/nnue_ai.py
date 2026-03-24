@@ -34,7 +34,7 @@ def _python_board_to_c(game: Game) -> CBoard:
 
 
 class NNUEAI(BaseAI):
-    def __init__(self, depth: int = 4, weights_path: str | None = None):
+    def __init__(self, depth: int = 5, weights_path: str | None = None):
         self.depth = depth
         self._engine = NNUESearchV2()
         path = weights_path or str(_DEFAULT_WEIGHTS)
