@@ -34,8 +34,9 @@
  - Review: RNN -> Seq2Seq -> Transformer
  - From Word2vec to BERT
  - GPT Series
+ - 
  - BERT -> T5
- - From CLIP to Flamingo
+  From CLIP to Flamingo
 
 ### Season 5: Reinforcement Learning [Videos](https://space.bilibili.com/20942052/lists/7264066)
  - RL Basics (Agent, Value Function, Policy)
@@ -46,10 +47,12 @@
  - RLHF & LLM
  - Agent
 
-### Season 6: AI Engineering
- - AI Engineering basics
- - Large-scale Training (DP -> PP -> TP -> ZeRo)
- - Inference Optimization (KVCache, FlashAttention, PagedAttention)
- - Model Lightweighting (Quantization, Distillation, LoRA)
- - Evaluation
- - RL Infra
+### Season 6: Build LLM
+ - Engineering Foundation (Compute & Memory & Communication)
+ - Modern LLM Architecture (RoPE, GQA, SWA, MLA, MoE, AttnRes)
+ - Data Pipeline (Corpus Cleaning, Tokenization, Chat Templates)
+ - Distributed Training (DP -> PP -> TP -> ZeRO)
+ - Post-Training & Alignment (RLHF, DPO, GRPO, LoRA)
+ - Evaluation (Objective Benchmarks, LLM-as-a-Judge)
+ - Inference Optimization (KV Cache, FlashAttention, PagedAttention, Quantization)
+ - Rebuilding "NanoChat" from Scratch
