@@ -32,20 +32,20 @@
 
 ### Season 4: Language Models [Videos](https://space.bilibili.com/20942052/lists/6900780)
  - Review: RNN -> Seq2Seq -> Transformer
- - From Word2vec to BERT
- - GPT Series
- - 
- - BERT -> T5
-  From CLIP to Flamingo
+ - From Word2vec to BERT (Representation Learning)
+ - GPT Series (Next-token Prediction is Intelligence)
+ - BERT -> T5 (How to scale-up BERT?)
+ - From CLIP to Flamingo (Way to Multimodality)
 
 ### Season 5: Reinforcement Learning [Videos](https://space.bilibili.com/20942052/lists/7264066)
  - RL Basics (Agent, Value Function, Policy)
  - Markov Decision Process (MP, MRP, MDP, & DP)
  - Traditional RL (Model-free Prediction, Model-free Control)
  - Deep RL (Value-based RL, Policy Gradient Methods, Actor-critic Methods)
- - AlphaGo & AlphaZero
- - RLHF & LLM
- - Agent
+ - Learning -> Optimization (TRPO -> PPO)
+ - RL in Action (LunarLander & Atari)
+ - RL in Action (Chess AI)
+ - RL in Action (AlphaGo)
 
 ### Season 6: Build LLM
  - Engineering Foundation (Compute & Memory & Communication)
