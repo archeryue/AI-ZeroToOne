@@ -134,12 +134,14 @@ class Board:
                 self.grid[row][col] = Stone.EMPTY
                 raise ValueError(f"Suicide at ({row}, {col}) is not allowed")
 
-        # Update ko point: if exactly 1 stone captured and placed stone has
-        # exactly 1 liberty (the captured position), it's a ko
+        # Update ko point: ko requires ALL three conditions:
+        # 1. Exactly 1 stone captured
+        # 2. Capturing group is a single stone (not connected to friendly group)
+        # 3. Capturing group has exactly 1 liberty (the captured position)
         if captured == 1:
             cap_pos = next(iter(captured_group))
-            _, placed_liberties = self._find_group(row, col)
-            if len(placed_liberties) == 1:
+            placed_group, placed_liberties = self._find_group(row, col)
+            if len(placed_group) == 1 and len(placed_liberties) == 1:
                 self.ko_point = cap_pos
             else:
                 self.ko_point = None

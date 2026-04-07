@@ -1,0 +1,6 @@
+build/
+*.so
+*.egg-info/
+__pycache__/
+*.pyc
+tests/test_go
