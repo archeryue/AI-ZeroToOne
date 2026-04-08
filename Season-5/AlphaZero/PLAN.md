@@ -177,6 +177,145 @@ The 8 vCPUs are sufficient because C++ MCTS is fast and GPU is the bottleneck fo
 
 ---
 
+## Revised Cost Estimates (Based on Actual Benchmarks)
+
+> Added after completing Steps 1-6 (C++ engine + MCTS). Benchmarks from Apple M1, -O3.
+> RunPod x86 CPUs (AMD EPYC / Intel Xeon) expected to be within ±20% of M1 single-core.
+
+### What Changed: Per-Leaf Cost is 3-4x Higher Than Estimated
+
+The original estimates modeled per-leaf CPU cost as just engine operations
+(clone + place_stone + check). The actual MCTS sim cost includes significant
+overhead from tree traversal, game state management (deque indexing, full
+Game<N> copy with history), node allocation, and backup propagation.
+
+| | 9x9 Est. | 9x9 Actual | 19x19 Est. | 19x19 Actual |
+|---|---|---|---|---|
+| Per-leaf CPU cost | 1.0μs | **3.2μs** | 2.5μs | **10.8μs** |
+| Ratio | | **3.2x** | | **4.3x** |
+
+Source: MCTS benchmark, batch=8 virtual loss, DESIGN.md Step 6 results.
+
+The 19x19 cost is dominated by Game<19> state copy (~2.9KB Board + history arrays)
+and deque-based game state storage at expanded nodes.
+
+### Revised Per Tick (256 games × 8 VL = 2,048 leaves)
+
+| | 9x9 | 19x19 (5M) | 19x19 (47M) |
+|---|---|---|---|
+| CPU work (single thread) | 2,048 × 3.2μs = **6.6ms** | 2,048 × 10.8μs = **22.1ms** | 22.1ms |
+| CPU work (5 workers) | **1.3ms** | **4.4ms** | **4.4ms** |
+| GPU forward pass (BF16) | 0.5ms | 0.5ms | **3.0ms** |
+| Sync + overhead | ~0.2ms | ~0.2ms | ~0.2ms |
+| **Effective per tick** | **~2.0ms** | **~5.1ms** | **~7.6ms** |
+| vs original estimate | 0.7ms (2.9x) | 1.2ms (4.3x) | 3ms (2.5x) |
+
+**Critical finding**: CPU is the bottleneck for ALL configurations, including the
+47M model. The original plan assumed GPU would be the bottleneck for 47M (3ms GPU
+vs 1ms CPU). In reality, CPU per worker is 4.4ms > GPU 3ms.
+
+### Revised 9x9 Go: 400 sims/move
+
+| Component | Original | **Revised** |
+|-----------|----------|-------------|
+| Effective time per tick | 0.7ms | **2.0ms** |
+| Time per 256 games (3,000 ticks) | 2.1 sec | **6.0 sec** |
+| Realistic (2x overhead†) | ~6 sec | **~12 sec** |
+| **Throughput** | ~150K games/hr | **~77K games/hr** |
+| 25K games self-play | ~10 min | **~20 min** |
+| **Total per run** | ~35 min | **~45 min** |
+| **Cost per run** | ~$0.7 | **~$0.9** |
+| Budget for 10 runs | < $10 | **~$9** |
+
+†Using 2x overhead (not 3x) since C++ MCTS eliminates most Python-side overhead.
+
+**Verdict: 9x9 costs are fine.** Modest increase, well within budget.
+
+### Revised 19x19 Go: 800 sims/move, 5M model
+
+| Component | Original | **Revised** |
+|-----------|----------|-------------|
+| Effective time per tick | 1.2ms | **5.1ms** |
+| Time per 256 games (22,000 ticks) | 26 sec | **112 sec** |
+| Realistic (2x overhead) | ~80 sec | **~224 sec** |
+| **Throughput** | ~11.5K games/hr | **~4.1K games/hr** |
+| 80K games self-play | ~7 hours | **~20 hours** |
+| + training | ~3 hours | ~3 hours |
+| + resign savings (-25%) | ~-2 hours | **~-5 hours** |
+| **Total per run** | **~8 hours** | **~18 hours** |
+| **Cost per run** | ~$10 | **~$21** |
+
+### Revised 19x19 Go: 800 sims/move, 47M model
+
+| Component | Original | **Revised** |
+|-----------|----------|-------------|
+| Bottleneck | GPU (3ms) | **CPU (4.4ms)** |
+| Effective time per tick | 3ms | **7.6ms** |
+| Time per 256 games | 66 sec | **167 sec** |
+| Realistic (2x overhead) | ~130 sec | **~334 sec** |
+| **Throughput** | ~7K games/hr | **~2.8K games/hr** |
+| 80K games + training | ~14 hours | **~32 hours** |
+| **Cost per run** | ~$17 | **~$38** |
+
+### Revised Total Budget
+
+| Phase | Orig Cost/run | **Revised** | Runs | Orig Total | **Revised Total** |
+|-------|--------------|-------------|------|-----------|-------------------|
+| 9x9 (5M, 400 sims) | ~$0.7 | **~$0.9** | 10 | ~$7 | **~$9** |
+| 19x19 (5M, 800 sims) | ~$10 | **~$21** | 3 | ~$30 | **~$63** |
+| 19x19 (47M, 800 sims) | ~$17 | **~$38** | 2 | ~$34 | **~$76** |
+| **Grand Total** | | | 15 | **~$71** | **~$148** |
+
+**The $100 budget no longer holds.** The revised estimate is ~$148, about 2.1x the original.
+
+### Why the Estimate Was Off
+
+1. **Per-leaf cost only counted engine ops** — tree traversal, deque indexing,
+   Game<N> copy with 8-position history, and node allocation were not accounted for
+2. **Game<19> is larger than Board<19>** — the Game struct stores history arrays
+   (8 × 361 = 2.9KB extra), making each clone ~6KB not ~3KB
+3. **deque<Game<N>> access pattern** — non-contiguous memory for game state storage
+   adds cache pressure vs the theoretical minimum
+
+### Mitigations to Stay Under $100
+
+**Option A: Reduce scope (easiest, recommended)**
+
+| Phase | Runs | Cost |
+|-------|------|------|
+| 9x9 (5M) | 10 | $9 |
+| 19x19 (5M) | 2 | $42 |
+| 19x19 (47M) | 1 | $38 |
+| **Total** | 13 | **~$89** |
+
+Drop from 15 to 13 runs. Skip one 19x19 5M run and one 47M run.
+
+**Option B: Optimize C++ MCTS hot path**
+
+The biggest cost is Game<19> state management. Potential optimizations:
+- **Lazy history copy**: only copy history when encoding observations, not on every
+  game state clone
+- **Smaller checkpoint state**: store only Board<N> at expanded nodes, replay history
+  when needed
+- **Contiguous arena for game states**: replace `deque<Game<N>>` with a flat arena
+  to improve cache locality
+- **Increase VL batch from 8 to 16**: amortize per-tick sync overhead (may reduce
+  effective per-sim cost by 10-20%)
+
+A 2x reduction in per-sim cost (10.8μs → ~5μs for 19x19) would bring the total
+back to ~$100. This is realistic — lazy history copy alone should save ~40%.
+
+**Option C: Rent more CPU cores**
+
+RunPod offers higher-CPU configs. 16 vCPU A100 ($1.64/hr) would give 10 workers
+instead of 5, halving CPU time. Net effect: ~$110 total at higher hourly rate
+but fewer hours.
+
+**Recommended strategy**: Combine A + B. Optimize the Game state clone (Option B)
+during Step 7 (SelfPlayWorker), and reduce 19x19 runs to 2+1 (Option A) as fallback.
+
+---
+
 ## Lessons from ChessRL Candidate 4 (6 Failed Versions)
 
 | Failure | Root Cause | Go Mitigation |
