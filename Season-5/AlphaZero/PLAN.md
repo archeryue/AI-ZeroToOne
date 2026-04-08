@@ -13,99 +13,31 @@ Season 5 finale — from RL basics all the way to AlphaZero on Go.
 
 ---
 
-## Why The Cost Is Affordable: Massive Parallelism
+## Hardware & Architecture
 
-The naive cost estimate (800 sims × millions of moves = billions of NN calls = $$$) is wrong because it ignores **batched parallelism across games**.
+**RunPod RTX 4090 24GB — ~$0.44/hr, 8-16 vCPUs, 32-64GB RAM.**
 
-### The GPU Batching Trick
-
-A single GPU forward pass takes ~0.3ms whether batch=1 or batch=256. So:
+Our largest model (23M) needs <10GB VRAM. CPU is the actual bottleneck, not GPU.
 
 ```
-❌ Sequential thinking:
-   1 game: 800 sims/move × 220 moves = 176,000 forward passes
-   80K games × 176K passes = 14 billion NN calls 😱
-
-✅ Parallel thinking:
-   256 games run simultaneously
-   Each "tick": collect 1 leaf per game → batch=256 → ONE forward pass (0.3ms)
-   800 ticks per move × 220 moves = 176,000 ticks total
-   Wall time: 176,000 × 0.3ms = 53 sec for ALL 256 games
-   Throughput: 256 games / 53 sec ≈ 17,000 games/hr
-```
-
-With **virtual loss** (collect 8 leaves per game per tick):
-```
-   Batch = 256 games × 8 VL = 2,048 per forward pass (~0.5ms)
-   Ticks per move: 800/8 = 100
-   Ticks per game: 100 × 220 = 22,000
-   Wall time: 22,000 × 0.5ms = 11 sec for ALL 256 games (GPU only)
-```
-
-The **real bottleneck is CPU** — MCTS tree traversal, game state copying, capture checking. This is why the **C++ engine is critical**. With C++ MCTS + engine, CPU cost per tick ≈ 2-10ms (depending on board size and thread count).
-
-### Hardware: RunPod RTX 4090 24GB
-
-**~$0.44/hr — 8-16 vCPUs, 32-64GB RAM, 24GB VRAM.**
-
-Our largest model (23M) needs <10GB VRAM total (inference + training), so the
-4090's 24GB is plenty. BF16 tensor core throughput (~330 TFLOPS) is more than
-enough for our model sizes. **CPU is the actual bottleneck** — see Cost Estimates.
-
-RAM constraint: keep replay buffer at 500K-1M positions (~7-15GB) to fit
-comfortably in 32-64GB system RAM.
-
-### Process Architecture (8 vCPUs)
-
-```
-RunPod RTX 4090 24GB — 8+ vCPUs, 32-64GB RAM
-
 Process 0: Orchestrator (Python)                         [1 vCPU]
   ├── GPU inference server (torch BF16, batched)
   ├── Training loop (SGD, interleaved with self-play)
   └── Logging, checkpointing, eval
 
 Processes 1-5: Self-Play Workers (C++ via pybind11)      [5 vCPUs]
-  ├── Worker 1: manages 52 parallel games
-  ├── Worker 2: manages 52 parallel games
-  ├── Worker 3: manages 52 parallel games
-  ├── Worker 4: manages 52 parallel games
-  └── Worker 5: manages 48 parallel games
-  Total: 256 parallel games
+  ├── Each worker manages ~52 parallel games
+  └── Total: 256 parallel games
 
-Reserved: [2 vCPUs] for OS, Python GC, I/O, etc.
-
-Communication:
-  Workers ──shared memory queue──→ GPU server ──shared memory──→ Workers
-  Workers ──shared memory──→ Replay Buffer ──→ Training process
+Reserved: [2 vCPUs] for OS, Python GC, I/O
 ```
 
-### Synchronization Flow (1 tick)
-
-```
-   Workers (C++)                  GPU Server (Python)
-   ─────────────                  ───────────────────
-1. Each worker selects 8 leaves
-   per game (virtual loss)
-   → 5 workers × ~50 games × 8
-   = 2,048 leaf observations
-
-2. Write obs to shared memory ──→ 3. Read all 2,048 obs
-                                  4. torch forward pass
-                                     batch=2048, BF16 (~0.5ms)
-5. Read policy+value results  ←── 6. Write results to shared memory
-
-7. Each worker: expand nodes,
-   backup values, remove VL
-
-8. Repeat until 400-800 sims done for current move
-```
-
-**Each worker is single-threaded C++** — no GIL issues, no Python overhead in the hot loop. Workers only call Python for GPU inference via shared memory.
+**Each tick**: 5 workers select 8 leaves/game (virtual loss) → 2,048 observations
+→ shared memory → GPU forward pass (BF16, ~0.5ms) → results back → expand + backup.
 
 ---
 
-## Cost Estimates (RTX 4090, Based on Actual Benchmarks)
+## Cost Estimates (Based on Actual Benchmarks)
 
 > Benchmarks from Apple M1, -O3, after completing Steps 1-6 (C++ engine + MCTS).
 > RunPod x86 CPUs (AMD EPYC / Intel Xeon) expected to be within ±20% of M1 single-core.
