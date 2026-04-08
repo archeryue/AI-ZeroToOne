@@ -2,9 +2,12 @@
 
 ## Mission
 
-Build AlphaZero from scratch for the game of Go. Train on 9x9 first, then scale to 19x19.
+Build AlphaZero from scratch for the game of Go.
 
-**Budget: 9x9 < $20, 19x19 < $80, total < $100.**
+- **9x9 and 13x13**: Pure self-play from scratch — the true "Zero" approach
+- **19x19**: Proper architecture with human pretraining — build it right, train it exploratory
+
+**Budget: total < $100.** Target ~$36, leaving headroom for extra experiments.
 
 Season 5 finale — from RL basics all the way to AlphaZero on Go.
 
@@ -207,83 +210,74 @@ Game<N> copy with history), node allocation, and backup propagation.
 | Ratio | | **3.2x** | | **4.3x** |
 
 Source: MCTS benchmark, batch=8 virtual loss, DESIGN.md Step 6 results.
+13x13 estimated by interpolation: ~5.5μs per sim.
 
-The 19x19 cost is dominated by Game<19> state copy (~2.9KB Board + history arrays)
-and deque-based game state storage at expanded nodes.
+### Per Tick (256 games × 8 VL = 2,048 leaves)
 
-### Revised Per Tick (256 games × 8 VL = 2,048 leaves)
-
-| | 9x9 | 19x19 (5M) | 19x19 (47M) |
+| | 9x9 (5M) | 13x13 (7M) | 19x19 (23M) |
 |---|---|---|---|
-| CPU work (single thread) | 2,048 × 3.2μs = **6.6ms** | 2,048 × 10.8μs = **22.1ms** | 22.1ms |
-| CPU work (5 workers) | **1.3ms** | **4.4ms** | **4.4ms** |
-| GPU forward pass (BF16) | 0.5ms | 0.5ms | **3.0ms** |
+| CPU work (single thread) | 6.6ms | ~11.3ms | 22.1ms |
+| CPU work (5 workers) | **1.3ms** | **~2.3ms** | **4.4ms** |
+| GPU forward pass (BF16) | 0.5ms | 0.6ms | **~2.0ms** |
 | Sync + overhead | ~0.2ms | ~0.2ms | ~0.2ms |
-| **Effective per tick** | **~2.0ms** | **~5.1ms** | **~7.6ms** |
-| vs original estimate | 0.7ms (2.9x) | 1.2ms (4.3x) | 3ms (2.5x) |
+| **Effective per tick** | **~2.0ms** | **~3.1ms** | **~6.6ms** |
 
-**Critical finding**: CPU is the bottleneck for ALL configurations, including the
-47M model. The original plan assumed GPU would be the bottleneck for 47M (3ms GPU
-vs 1ms CPU). In reality, CPU per worker is 4.4ms > GPU 3ms.
+**CPU is the bottleneck for ALL configurations.** GPU has idle headroom,
+which is why larger models (7M, 23M) don't hurt throughput.
 
-### Revised 9x9 Go: 400 sims/move
+### Throughput Estimates
 
-| Component | Original | **Revised** |
-|-----------|----------|-------------|
-| Effective time per tick | 0.7ms | **2.0ms** |
-| Time per 256 games (3,000 ticks) | 2.1 sec | **6.0 sec** |
-| Realistic (2x overhead†) | ~6 sec | **~12 sec** |
-| **Throughput** | ~150K games/hr | **~77K games/hr** |
-| 25K games self-play | ~10 min | **~20 min** |
-| **Total per run** | ~35 min | **~45 min** |
-| **Cost per run ($0.44/hr)** | | **~$0.3** |
-| Budget for 10 runs | | **~$3** |
+| | 9x9 (400 sims) | 13x13 (600 sims) | 19x19 (800 sims) |
+|---|---|---|---|
+| Ticks/game | 3,000 | 9,000 | 22,000 |
+| Time/256 games (2x overhead) | 12s | 56s | 290s |
+| **Throughput** | **77K games/hr** | **16K games/hr** | **3.2K games/hr** |
 
-†Using 2x overhead (not 3x) since C++ MCTS eliminates most Python-side overhead.
+### Per-Phase Cost (RTX 4090 at $0.44/hr)
 
-**Verdict: 9x9 costs are trivial.**
+**Phase 1 — 9x9 pure self-play (200K games/run)**:
 
-### Revised 19x19 Go: 800 sims/move, 5M model
+| Component | Estimate |
+|-----------|----------|
+| Self-play: 200K / 77K games/hr | ~2.6h |
+| Training | ~0.5h |
+| **Total per run** | **~3h** |
+| **Cost per run** | **~$1.4** |
 
-| Component | Original | **Revised** |
-|-----------|----------|-------------|
-| Effective time per tick | 1.2ms | **5.1ms** |
-| Time per 256 games (22,000 ticks) | 26 sec | **112 sec** |
-| Realistic (2x overhead) | ~80 sec | **~224 sec** |
-| **Throughput** | ~11.5K games/hr | **~4.1K games/hr** |
-| 80K games self-play | ~7 hours | **~20 hours** |
-| + training | ~3 hours | ~3 hours |
-| + resign savings (-25%) | ~-2 hours | **~-5 hours** |
-| **Total per run** | ~8 hours | **~18 hours** |
-| **Cost per run ($0.44/hr)** | | **~$8** |
+**Phase 2 — 13x13 pure self-play (150K games/run)**:
 
-### Revised 19x19 Go: 800 sims/move, 47M model
+| Component | Estimate |
+|-----------|----------|
+| Self-play: 150K / 16K games/hr | ~9.4h |
+| Training | ~1.5h |
+| Resign savings (-15%) | ~-1.5h |
+| **Total per run** | **~9.5h** |
+| **Cost per run** | **~$4.2** |
 
-| Component | Original | **Revised** |
-|-----------|----------|-------------|
-| Bottleneck | GPU (3ms) | **CPU (4.4ms)** |
-| Effective time per tick | 3ms | **7.6ms** |
-| Time per 256 games | 66 sec | **167 sec** |
-| Realistic (2x overhead) | ~130 sec | **~334 sec** |
-| **Throughput** | ~7K games/hr | **~2.8K games/hr** |
-| 80K games + training | ~14 hours | **~32 hours** |
-| **Cost per run ($0.44/hr)** | | **~$14** |
+Note: resign savings are modest for 13x13 — shorter games, less waste from lost positions.
 
-### Revised Total Budget (RTX 4090 at $0.44/hr)
+**Phase 3 — 19x19 pretrained + self-play (30K games/run)**:
 
-| Phase | Hours/run | Runs | Total Hours | **Cost** |
-|-------|-----------|------|-------------|----------|
-| 9x9 (5M, 400 sims) | 0.75h | 10 | 7.5h | **~$3** |
-| 19x19 (5M, 800 sims) | 18h | 3 | 54h | **~$24** |
-| 19x19 (47M, 800 sims) | 32h | 2 | 64h | **~$28** |
-| **Grand Total** | | **15** | **125.5h** | **~$55** |
+| Component | Estimate |
+|-----------|----------|
+| Self-play: 30K / 3.2K games/hr | ~9.4h |
+| Training | ~1h |
+| Resign savings (-25%) | ~-2.5h |
+| **Total per run** | **~8h** |
+| **Cost per run** | **~$3.5** |
 
-**$55 for all 15 runs — well under the $100 budget.** Switching from A100 to 4090
-saves 2.7x on hourly cost with identical GPU performance for our model sizes. This
-absorbs the 3-4x higher-than-expected CPU costs and still leaves ~$45 headroom for
-additional experimentation.
+### Total Budget
 
-For reference, the same 15 runs on A100 would cost ~$148.
+| Phase | Cost/run | Runs | Total |
+|-------|----------|------|-------|
+| 9x9 pure self-play (5M, 200K games) | ~$1.4 | 8 | **~$11** |
+| 13x13 pure self-play (7M, 150K games) | ~$4.2 | 5 | **~$21** |
+| 19x19 pretrained (23M, 30K games) | ~$3.5 | 2 | **~$7** |
+| **Grand Total** | | **15** | **~$39** |
+
+**~$39 total, ~$61 headroom.** If 9x9 or 13x13 show promise, we can double the
+game count for a few extra dollars. If 19x19 pretraining works well, we can add
+more self-play runs cheaply.
 
 ### Why the Original Per-Leaf Estimate Was Off
 
@@ -294,15 +288,14 @@ For reference, the same 15 runs on A100 would cost ~$148.
 3. **deque<Game<N>> access pattern** — non-contiguous memory for game state storage
    adds cache pressure vs the theoretical minimum
 
-### Optional: Further Optimizations (Bonus, Not Required for Budget)
+### Optional: Further Optimizations
 
 The CPU hot path can still be optimized during Step 7 (SelfPlayWorker):
 - **Lazy history copy**: only copy history when encoding observations, not on every clone
 - **Contiguous arena for game states**: replace `deque<Game<N>>` with a flat arena
 - **Increase VL batch from 8 to 16**: amortize per-tick sync overhead
 
-A 2x reduction in per-sim cost would bring the total to ~$30 — leaving room for
-even more experimental runs if needed.
+A 2x reduction in per-sim cost would bring the total to ~$20.
 
 ---
 
@@ -311,40 +304,31 @@ even more experimental runs if needed.
 | Failure | Root Cause | Go Mitigation |
 |---------|-----------|---------------|
 | **Draw deadlock** — 99.5% draws, no signal | Chinese Chess draws; sparse reward | Go always has a winner (komi). No draw problem. |
-| **Chicken-and-egg** — bad policy → bad MCTS → worse policy | Too few sims, too small model, no pretraining | Human pretraining gives strong init; 400-800 sims |
-| **Self-play overfitting** — memorizes one trick | Buffer too small (20K) | Large buffer (500K+), 8x symmetry augmentation |
-| **Policy degradation** — MCTS targets ≤ pretrained policy | Weak value head + low sims = noise | Pretrained value head + 800 sims = strong targets |
+| **Chicken-and-egg** — bad policy → bad MCTS → worse policy | Too few sims, too small model, no pretraining | 400-800 sims; 200K+ games for 9x9/13x13; pretraining for 19x19 |
+| **Self-play overfitting** — memorizes one trick | Buffer too small (20K) | Large buffer (500K-1M), 8x symmetry augmentation |
+| **Policy degradation** — MCTS targets ≤ pretrained policy | Weak value head + low sims = noise | High sim count + many games = strong targets |
 
 ---
 
 ## Training Pipeline
 
-### Phase 0: Pretraining on Human Games (Local, Free)
+### Phase 1: 9x9 Pure Self-Play (1x RTX 4090, ~$1.4/run)
 
-**Data sources** (freely available):
-- featurecat/go-dataset: 21.1M games
-- KGS archives: 100K+ games
-- Japanese pro archives: 88K+ games
-
-**Training**:
-- Policy: cross-entropy on human moves (~50-55% top-1 accuracy)
-- Value: MSE on game outcome (+1/-1)
-- Local GPU (RTX 5060 Ti), ~2-4 hours
-- Same ResNet architecture used for self-play
-
-**Why**: Skips the random-play bootstrap. MCTS starts with competent search from day 1.
-
-### Phase 1: 9x9 Self-Play Training (1x RTX 4090, ~$0.3/run)
+**No pretraining — learns Go from scratch.** The model starts with random weights
+and discovers captures, eyes, territory, and strategy entirely through self-play.
+This is the true AlphaZero/"Zero" approach.
 
 **Config**:
 
 | Parameter | Value |
 |-----------|-------|
+| Model | 10 blocks × 128ch (5M) |
 | MCTS sims/move | 400 |
 | Virtual loss batch | 8 |
-| Parallel games | 256 (4 workers × 64) |
-| Games per iteration | 256 |
-| Positions/iter (×8 symmetry) | 256 × 60 × 8 = 123K |
+| Parallel games | 256 (5 workers × ~52) |
+| Games per run | 200K |
+| Positions/game (×8 symmetry) | 60 × 8 = 480 |
+| Total positions per run | **96M** |
 | Replay buffer | 500K positions |
 | Train batch size | 256 |
 | Train steps per iter | 100 |
@@ -354,25 +338,65 @@ even more experimental runs if needed.
 | Temperature | 1.0 first 15 moves, → 0.1 |
 | Dirichlet alpha/epsilon | 0.11 / 0.25 |
 | Komi | 7.5 |
-| Total iterations | 100-200 |
 
-**Targets**: >95% vs Random, >80% vs pure MCTS, >60% vs GnuGo lv5.
+**Targets**: >95% vs Random, >80% vs pure MCTS, beat GnuGo lv10.
 
-### Phase 2: 19x19 Self-Play Training (1x RTX 4090, ~$8-14/run)
+### Phase 2: 13x13 Pure Self-Play (1x RTX 4090, ~$3.5/run)
 
-Start from 19x19 pretrained weights. Same pipeline, scaled up:
+**Also pure self-play from scratch.** 13x13 is the sweet spot — big enough for
+real strategy (joseki, influence, territory balance, middle-game fighting), small
+enough to train well. It's a real competitive format on many online Go servers.
 
-| Parameter | 9x9 | 19x19 |
-|-----------|-----|-------|
-| Sims/move | 400 | 800 |
-| Moves/game | ~60 | ~220 |
-| Parallel games | 256 | 256 |
-| Games per iter | 256 | 128 |
-| Total games | 25K | 80K |
-| Dirichlet alpha | 0.11 | 0.03 |
-| Resign threshold | none | v < -0.95 for 3+ moves |
+| Parameter | Value |
+|-----------|-------|
+| Model | 15 blocks × 128ch (7M) |
+| MCTS sims/move | 600 |
+| Virtual loss batch | 8 |
+| Parallel games | 256 |
+| Games per run | 150K |
+| Positions/game (×8 symmetry) | 120 × 8 = 960 |
+| Total positions per run | **144M** |
+| Replay buffer | 1M positions |
+| Dirichlet alpha/epsilon | 0.07 / 0.25 |
+| Komi | 7.5 |
 
-**Targets**: >99% vs Random, >90% vs GnuGo lv1, >50% vs GnuGo lv10.
+**Targets**: >99% vs Random, beat GnuGo lv5+, solid mid-game strategy.
+
+### Phase 3: 19x19 Pretrained + Self-Play (1x RTX 4090, ~$3.5/run)
+
+**Human pretraining, then self-play refinement.** We build the proper AlphaGo Zero
+architecture (20b×256ch, 800 sims) and full training pipeline. The goal is a
+correct, production-quality implementation — not a fully converged model.
+
+**Pretraining** (local GPU, free):
+
+| Source | Games |
+|--------|-------|
+| featurecat/go-dataset | 21.1M |
+| KGS archives | 100K+ |
+| Japanese pro archives | 88K+ |
+
+- Policy: cross-entropy on human moves (~50-55% top-1 accuracy)
+- Value: MSE on game outcome (+1/-1)
+- Local GPU (RTX 5060 Ti), ~2-4 hours
+
+**Self-play refinement** (cloud):
+
+| Parameter | Value |
+|-----------|-------|
+| Model | 20 blocks × 256ch (23M) |
+| MCTS sims/move | 800 |
+| Virtual loss batch | 8 |
+| Parallel games | 256 |
+| Games per run | 30K |
+| Positions/game (×8 symmetry) | 220 × 8 = 1,760 |
+| Total positions per run | **53M** |
+| Replay buffer | 1M positions |
+| Dirichlet alpha/epsilon | 0.03 / 0.25 |
+| Resign threshold | v < -0.95 for 3+ moves |
+
+**Targets**: Measurable improvement over pretraining baseline, demonstrate the
+full AlphaZero loop works at 19x19 scale.
 
 ---
 
@@ -452,31 +476,42 @@ void process_results(std::vector<PolicyValue> results);    // C++ updates trees
 | Color to play | All 1s or 0s | 1 |
 | **Total** | | **17** |
 
-**9x9 model**:
+**Model sizes are chosen per board size.** Since CPU is the bottleneck for all
+configs (not GPU), larger models don't hurt throughput — size for representational
+capacity, not inference speed.
+
+**9x9 model — 10 blocks × 128ch ≈ 5M params**:
 ```
 Input: (batch, 17, 9, 9)
   → Conv2d(17→128, k=3, pad=1) + BN + ReLU
   → 10 Residual Blocks (128 channels)
   → Policy Head: Conv1x1(128→2) + BN + ReLU + FC(162→82)  [81 + pass]
   → Value Head:  Conv1x1(128→1) + BN + ReLU + FC(81→256) + ReLU + FC(256→1) + tanh
-Parameters: ~5M
 ```
+Well-tested architecture. 200K games × 480 positions = 96M positions — 19x data-to-param ratio.
 
-**19x19 model (option A — small, fast)**:
+**13x13 model — 15 blocks × 128ch ≈ 7M params**:
 ```
-Same as 9x9 but Input: (batch, 17, 19, 19)
-  → Policy FC: (722→362)
-  → Value FC: (361→256)
-Parameters: ~5M
+Input: (batch, 17, 13, 13)
+  → Conv2d(17→128, k=3, pad=1) + BN + ReLU
+  → 15 Residual Blocks (128 channels)
+  → Policy Head: Conv1x1(128→2) + BN + ReLU + FC(338→170)  [169 + pass]
+  → Value Head:  Conv1x1(128→1) + BN + ReLU + FC(169→256) + ReLU + FC(256→1) + tanh
 ```
+More depth than 9x9 (15 vs 10 blocks) for deeper tactical reading. Same channel
+width — 128 is adequate for 13x13 spatial patterns. 100K games × 960 = 96M positions.
 
-**19x19 model (option B — large, strong)**:
+**19x19 model — 20 blocks × 256ch ≈ 23M params** (AlphaGo Zero architecture):
 ```
-  → 20 Residual Blocks, 256 channels
-Parameters: ~47M
+Input: (batch, 17, 19, 19)
+  → Conv2d(17→256, k=3, pad=1) + BN + ReLU
+  → 20 Residual Blocks (256 channels)
+  → Policy Head: Conv1x1(256→2) + BN + ReLU + FC(722→362)  [361 + pass]
+  → Value Head:  Conv1x1(256→1) + BN + ReLU + FC(361→256) + ReLU + FC(256→1) + tanh
 ```
-
-Strategy: start with option A (fast self-play), then optionally train option B.
+The standard architecture from the AlphaGo Zero paper (not the 40-block final
+version, but the one that already beat all previous AlphaGo versions within 3 days).
+Human pretraining + exploratory self-play. Built right, not trained to convergence.
 
 ### 4. Data Augmentation (8-fold Symmetry)
 
@@ -495,8 +530,9 @@ def augment_8fold(obs, policy_map, value):
     return augmented  # 8 samples from 1 position
 ```
 
-25K games × 60 moves × 8 = **12M training positions** from just 25K games (9x9).
-80K games × 220 moves × 8 = **140M training positions** (19x19).
+200K games × 60 moves × 8 = **96M training positions** (9x9 pure self-play).
+150K games × 120 moves × 8 = **144M training positions** (13x13 pure self-play).
+30K games × 220 moves × 8 = **53M training positions** (19x19 pretrained + self-play).
 
 ### 5. Replay Buffer
 
@@ -544,6 +580,15 @@ def augment_8fold(obs, policy_map, value):
 3. **GnuGo** (level 1-10) — classical engine, level 10 ≈ 5-8 kyu
 4. **Previous checkpoint** — Elo tracking
 
+**Per-phase targets**:
+
+| | 9x9 | 13x13 | 19x19 |
+|---|---|---|---|
+| vs Random | >99% | >99% | >95% |
+| vs GnuGo lv5 | >80% | >60% | — |
+| vs GnuGo lv10 | >50% | — | — |
+| vs pretraining baseline | — | — | measurable gain |
+
 **GTP protocol**: implement Go Text Protocol so our engine can play vs GnuGo, on OGS, or vs humans.
 
 **Elo tracking**: 100+ games between checkpoints, plot Elo vs training time.
@@ -564,7 +609,7 @@ AlphaZero/
 │   └── setup.py               # Build script
 ├── model/
 │   ├── network.py             # ResNet dual-head (policy + value)
-│   └── config.py              # Model configs (9x9, 19x19, small/large)
+│   └── config.py              # Model configs (9x9/5M, 13x13/7M, 19x19/23M)
 ├── training/
 │   ├── pretrain.py            # Supervised pretraining on human games
 │   ├── self_play.py           # Self-play orchestrator (workers + GPU server)
@@ -601,36 +646,42 @@ AlphaZero/
 - Unit tests on small board (5x5)
 
 ### Step 3: Neural Network + Integration (~1 day, local)
-- ResNet dual-head in PyTorch
+- ResNet dual-head in PyTorch (5M/7M/23M configs)
 - BF16 batched inference
 - Wire up: C++ MCTS calls Python GPU → results back to C++
 - Smoke test: random network + MCTS plays legal Go
 
-### Step 4: Data Pipeline + Pretraining (~2 days, local)
-- Download SGF records
-- SGF parser → (board, move, outcome) triples
-- Supervised pretraining on local GPU (~2-4 hours)
-- Verify: pretrained net + MCTS plays reasonable Go
-
-### Step 5: Self-Play Training Loop (~1 day, local)
+### Step 4: Self-Play Training Loop (~1 day, local)
 - Multi-worker self-play + shared replay buffer + training
 - 8-fold symmetry augmentation
 - Resign threshold, tree reuse
 - Local smoke test with tiny model on 9x9
 
-### Step 6: Cloud Training — 9x9 (~$3)
+### Step 5: Cloud Training — 9x9 Pure Self-Play (~$11)
 - Rent 1x RTX 4090 24GB on RunPod ($0.44/hr)
-- Full training: 400 sims, 10 blocks/128ch, 25K games
+- Pure self-play from scratch: 400 sims, 10b×128ch (5M), 200K games
 - Eval vs GnuGo
-- ~10 runs of experimentation
+- ~8 runs of experimentation
 
-### Step 7: Cloud Training — 19x19 (~$52)
+### Step 6: Cloud Training — 13x13 Pure Self-Play (~$21)
+- Same RTX 4090, pure self-play from scratch
+- 600 sims, 15b×128ch (7M), 150K games
+- Eval vs GnuGo
+- ~5 runs of experimentation
+
+### Step 7: Data Pipeline + Pretraining for 19x19 (~1 day, local)
+- Download SGF records
+- SGF parser → (board, move, outcome) triples
+- Supervised pretraining of 20b×256ch (23M) on local GPU (~2-4 hours)
+- Verify: pretrained net + MCTS plays reasonable 19x19 Go
+
+### Step 8: Cloud Training — 19x19 Exploratory (~$7)
 - Same RTX 4090, start from pretrained 19x19 weights
-- 800 sims, 80K games
-- Try both 5M and 47M model
-- Eval vs GnuGo levels 1-10
+- 800 sims, 20b×256ch (23M), 30K games
+- Verify self-play improves over pretraining baseline
+- ~2 runs
 
-### Step 8: Polish & Demo (~1 day, local)
+### Step 9: Polish & Demo (~1 day, local)
 - GTP protocol for playing vs humans / on OGS
 - Elo curves, loss plots, example game SGFs
 - Season 5 write-up
@@ -645,8 +696,9 @@ AlphaZero/
 | C++ MCTS bugs | Test on 5x5 first; compare with Python MCTS reference |
 | CPU bottleneck (game logic) | C++ engine + multi-worker parallelism |
 | Python↔C++ overhead | Batch communication; minimize Python calls |
-| Self-play doesn't improve | Human pretraining ensures strong init; 800 sims gives quality targets |
-| Budget overrun | 9x9 is a complete project; 19x19 optional |
+| Pure self-play doesn't learn | 9x9 should work (well-studied); 13x13 is the stretch goal |
+| 19x19 pretraining weak | Use large pro game dataset (21M+); verify before cloud runs |
+| Budget overrun | ~$39 target with ~$61 headroom; 9x9 alone proves the system |
 
 ---
 
