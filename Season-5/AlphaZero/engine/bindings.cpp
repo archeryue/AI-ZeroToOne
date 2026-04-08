@@ -112,6 +112,8 @@ template<int N>
 void bind_mcts(py::module_& m, const char* name) {
     using Tree = mcts::MCTSTree<N>;
     using G = go::Game<N>;
+    constexpr int ACTIONS = N * N + 1;
+    constexpr int OBS_PLANES = 17;
 
     py::class_<Tree>(m, name)
         .def(py::init<const G&, float, float, float>(),
@@ -125,64 +127,44 @@ void bind_mcts(py::module_& m, const char* name) {
         .def("run_simulations", [](Tree& tree, int num_sims, int leaves_per_sim,
                                     py::function evaluator, bool add_noise, int seed) {
             std::mt19937 rng(seed);
+            constexpr int MAX_BATCH = 64;
+            mcts::LeafInfo leaves[MAX_BATCH];
 
             for (int sim = 0; sim < num_sims; sim += leaves_per_sim) {
                 int batch = std::min(leaves_per_sim, num_sims - sim);
+                batch = std::min(batch, MAX_BATCH);
 
-                // Select leaves
-                auto leaves = tree.select_leaves(batch);
+                tree.select_leaves(leaves, batch);
 
-                // Apply Dirichlet noise on first expansion of root
-                if (add_noise && sim == 0 && tree.nodes[tree.root_idx].is_expanded()) {
+                // Apply Dirichlet noise on first expansion
+                if (add_noise && !tree.root_noise_applied
+                    && tree.nodes[tree.root_idx].is_expanded()) {
                     tree.apply_dirichlet_noise(rng);
                 }
 
-                // Fill observations for leaves needing NN
                 int nn_count = 0;
-                for (const auto& l : leaves) if (l.needs_nn) nn_count++;
+                for (int i = 0; i < batch; ++i) if (leaves[i].needs_nn) nn_count++;
 
                 if (nn_count > 0) {
-                    py::array_t<float> obs_batch({nn_count, 17, N, N});
-                    tree.fill_observations(leaves, obs_batch.mutable_data());
+                    py::array_t<float> obs_batch({nn_count, OBS_PLANES, N, N});
+                    tree.fill_observations(leaves, batch, obs_batch.mutable_data());
 
-                    // Call Python evaluator
                     py::tuple result = evaluator(obs_batch);
                     py::array_t<float> policies = result[0].cast<py::array_t<float>>();
                     py::array_t<float> values = result[1].cast<py::array_t<float>>();
 
-                    tree.process_results(leaves, policies.data(), values.data());
+                    tree.process_results(leaves, batch, policies.data(), values.data());
                 } else {
-                    // All terminal — backup directly
-                    tree.process_results(leaves, nullptr, nullptr);
-                }
-
-                // Apply noise after first expansion
-                if (add_noise && !tree.root_noise_applied
-                    && tree.nodes[tree.root_idx].is_expanded()) {
-                    tree.apply_dirichlet_noise(rng);
+                    tree.process_results(leaves, batch, nullptr, nullptr);
                 }
             }
         }, py::arg("num_sims"), py::arg("leaves_per_sim") = 8,
            py::arg("evaluator") = py::none(),
            py::arg("add_noise") = true, py::arg("seed") = 42)
 
-        // Get leaf observations for external NN evaluation
-        .def("select_leaves", [](Tree& tree, int n) {
-            auto leaves = tree.select_leaves(n);
-            int nn_count = 0;
-            for (const auto& l : leaves) if (l.needs_nn) nn_count++;
-
-            py::array_t<float> obs({nn_count, 17, N, N});
-            tree.fill_observations(leaves, obs.mutable_data());
-
-            // Return obs and leaf info for process_results
-            // Store leaves internally for the next process_results call
-            return py::make_tuple(obs, nn_count);
-        }, py::arg("num_leaves") = 8)
-
         // Get policy from visit counts
         .def("get_policy", [](const Tree& tree, float temperature) {
-            py::array_t<float> policy(Tree::ACTIONS);
+            py::array_t<float> policy(ACTIONS);
             tree.get_policy(policy.mutable_data(), temperature);
             return policy;
         }, py::arg("temperature") = 1.0f)
@@ -203,6 +185,7 @@ void bind_mcts(py::module_& m, const char* name) {
         .def_property_readonly("root_visit_count", &Tree::root_visit_count)
         .def_property_readonly("root_value", &Tree::root_value)
         .def_property_readonly("num_nodes", &Tree::num_nodes)
+        .def_property_readonly("num_game_states", &Tree::num_game_states)
         .def("root_children_visits", &Tree::root_children_visits)
         .def("root_children_q", &Tree::root_children_q)
         ;

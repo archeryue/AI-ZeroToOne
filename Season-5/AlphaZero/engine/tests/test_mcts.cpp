@@ -40,6 +40,7 @@ void test_tree_creation() {
     assert(tree.num_nodes() == 1);
     assert(tree.root_visit_count() == 0);
     assert(!tree.nodes[tree.root_idx].is_expanded());
+    assert(tree.nodes[tree.root_idx].game_idx >= 0);
 
     printf("  PASS: tree creation\n");
 }
@@ -50,16 +51,13 @@ void test_expand_root() {
     Game<9> game(5.5f);
     MCTSTree<9> tree(game);
 
-    // Expand root with uniform policy
     float policy[82];
     uniform_policy<9>(policy);
     tree.expand(tree.root_idx, policy);
 
     assert(tree.nodes[tree.root_idx].is_expanded());
-    // On empty 9x9 board, all 82 actions are legal (81 positions + pass)
     assert(tree.nodes[tree.root_idx].num_children == 82);
 
-    // Check children have correct priors (approximately uniform)
     int start = tree.nodes[tree.root_idx].children_start;
     for (int i = 0; i < 82; ++i) {
         const MCTSNode& child = tree.nodes[start + i];
@@ -74,14 +72,12 @@ void test_expand_root() {
 
 void test_puct_selection() {
     Game<9> game(5.5f);
-    MCTSTree<9> tree(game, /*c_puct=*/1.5f);
+    MCTSTree<9> tree(game, 1.5f);
 
-    // Expand with a policy that heavily favors action 0 (tengen area)
     float policy[82];
-    hot_policy<9>(policy, 40, 0.95f);  // center of 9x9 = (4,4) = action 40
+    hot_policy<9>(policy, 40, 0.95f);
     tree.expand(tree.root_idx, policy);
 
-    // With no visits, PUCT selects highest prior
     int best = tree.select_child(tree.root_idx);
     assert(best >= 0);
     assert(tree.nodes[best].action == 40);
@@ -95,27 +91,25 @@ void test_backup() {
     Game<9> game(5.5f);
     MCTSTree<9> tree(game, 1.5f);
 
-    // Expand root
     float policy[82];
     uniform_policy<9>(policy);
     tree.expand(tree.root_idx, policy);
 
-    // Select a leaf (should be a child of root)
-    auto path = tree.select_leaf();
-    assert(path.size() == 2);  // root → child
+    int path[MAX_PATH_DEPTH];
+    int path_len = tree.select_leaf(path);
+    assert(path_len == 2);  // root → child
 
-    int leaf = path.back();
+    int leaf = path[path_len - 1];
     assert(tree.nodes[leaf].virtual_loss == 1);
 
     // Backup with value +0.5
-    tree.backup(path, 0.5f);
+    tree.backup(path, path_len, 0.5f);
 
-    // Leaf should have visit=1, value_sum=0.5
     assert(tree.nodes[leaf].visit_count == 1);
     assert(std::abs(tree.nodes[leaf].value_sum - 0.5f) < 1e-6f);
     assert(tree.nodes[leaf].virtual_loss == 0);
 
-    // Root should have visit=1, value_sum=-0.5 (negated)
+    // Root: value flipped
     assert(tree.nodes[tree.root_idx].visit_count == 1);
     assert(std::abs(tree.nodes[tree.root_idx].value_sum - (-0.5f)) < 1e-6f);
 
@@ -128,82 +122,69 @@ void test_virtual_loss() {
     Game<9> game(5.5f);
     MCTSTree<9> tree(game, 1.5f);
 
-    // Expand root with uniform policy
     float policy[82];
     uniform_policy<9>(policy);
     tree.expand(tree.root_idx, policy);
 
-    // Select multiple leaves — virtual loss should push to different children
     int num_leaves = 8;
-    auto leaves = tree.select_leaves(num_leaves);
-    assert(static_cast<int>(leaves.size()) == num_leaves);
+    LeafInfo leaves[8];
+    tree.select_leaves(leaves, num_leaves);
 
-    // Collect the leaf node indices
     std::set<int> leaf_nodes;
-    for (const auto& l : leaves) {
-        leaf_nodes.insert(l.leaf_idx);
+    for (int i = 0; i < num_leaves; ++i) {
+        leaf_nodes.insert(leaves[i].leaf_idx);
     }
 
-    // With uniform prior and virtual loss, we should get different children
-    // (at least a few distinct ones, though not necessarily all 8 unique)
-    assert(leaf_nodes.size() >= 4);  // conservative check
+    // With uniform prior and virtual loss, should get diverse children
+    assert(leaf_nodes.size() >= 4);
 
-    // All leaves should have virtual_loss >= 1
-    for (const auto& l : leaves) {
-        assert(tree.nodes[l.leaf_idx].virtual_loss >= 1);
+    for (int i = 0; i < num_leaves; ++i) {
+        assert(tree.nodes[leaves[i].leaf_idx].virtual_loss >= 1);
     }
 
     printf("  PASS: virtual loss yields different paths (%zu unique)\n", leaf_nodes.size());
 }
 
 // ─── Test 6: Full simulation cycle ──────────────────────────────
-// Expand root, select leaf, fill obs, expand leaf, backup.
 
 void test_full_cycle() {
     Game<9> game(5.5f);
     MCTSTree<9> tree(game, 1.5f);
 
-    // First: expand root (simulates first NN call)
     float root_policy[82];
     uniform_policy<9>(root_policy);
     tree.expand(tree.root_idx, root_policy);
 
-    // Run 100 simulations with random "NN"
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> vdist(-1.0f, 1.0f);
 
     for (int sim = 0; sim < 100; ++sim) {
-        auto leaves = tree.select_leaves(1);
-        assert(leaves.size() == 1);
+        LeafInfo leaves[1];
+        tree.select_leaves(leaves, 1);
 
-        const auto& leaf = leaves[0];
-        if (leaf.needs_nn) {
-            // Create game state for this leaf
+        if (leaves[0].needs_nn) {
             float obs[17 * 81];
-            tree.fill_observations(leaves, obs);
+            tree.fill_observations(leaves, 1, obs);
 
-            // Random policy and value
             float policy[82];
             uniform_policy<9>(policy);
             float value = vdist(rng);
-
-            tree.process_results(leaves, policy, &value);
+            tree.process_results(leaves, 1, policy, &value);
         } else {
-            tree.process_results(leaves, nullptr, nullptr);
+            tree.process_results(leaves, 1, nullptr, nullptr);
         }
     }
 
     assert(tree.root_visit_count() == 100);
 
-    // Get policy — should be non-trivial
     float policy[82];
     tree.get_policy(policy, 1.0f);
     float sum = 0.0f;
     for (int i = 0; i < 82; ++i) sum += policy[i];
     assert(std::abs(sum - 1.0f) < 1e-4f);
 
-    printf("  PASS: full simulation cycle (100 sims, root visits=%d, nodes=%d)\n",
-           tree.root_visit_count(), tree.num_nodes());
+    printf("  PASS: full simulation cycle (100 sims, root visits=%d, nodes=%d, game_states=%d)\n",
+           tree.root_visit_count(), tree.num_nodes(), tree.num_game_states());
 }
 
 // ─── Test 7: Tree reuse ────────────────────────────────────────
@@ -212,27 +193,25 @@ void test_tree_reuse() {
     Game<9> game(5.5f);
     MCTSTree<9> tree(game, 1.5f);
 
-    // Expand root
     float policy[82];
     uniform_policy<9>(policy);
     tree.expand(tree.root_idx, policy);
 
-    // Run some sims to build up the tree
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> vdist(-1.0f, 1.0f);
 
     for (int sim = 0; sim < 50; ++sim) {
-        auto leaves = tree.select_leaves(1);
-        const auto& leaf = leaves[0];
-        if (leaf.needs_nn) {
+        LeafInfo leaves[1];
+        tree.select_leaves(leaves, 1);
+        if (leaves[0].needs_nn) {
             float obs[17 * 81];
-            tree.fill_observations(leaves, obs);
+            tree.fill_observations(leaves, 1, obs);
             float p[82];
             uniform_policy<9>(p);
             float v = vdist(rng);
-            tree.process_results(leaves, p, &v);
+            tree.process_results(leaves, 1, p, &v);
         } else {
-            tree.process_results(leaves, nullptr, nullptr);
+            tree.process_results(leaves, 1, nullptr, nullptr);
         }
     }
 
@@ -240,7 +219,6 @@ void test_tree_reuse() {
     int action = tree.best_action();
     assert(action >= 0 && action < 82);
 
-    // Find the child node for this action
     int child_visits = 0;
     const MCTSNode& root = tree.nodes[old_root];
     for (int i = 0; i < root.num_children; ++i) {
@@ -250,13 +228,10 @@ void test_tree_reuse() {
         }
     }
 
-    // Advance tree
     tree.advance(action);
 
     assert(tree.root_idx != old_root);
     assert(tree.nodes[tree.root_idx].action == action);
-
-    // Root visits should be preserved from the child
     assert(tree.root_visit_count() == child_visits);
 
     printf("  PASS: tree reuse (action=%d, preserved visits=%d)\n", action, child_visits);
@@ -266,46 +241,36 @@ void test_tree_reuse() {
 
 void test_dirichlet_noise() {
     Game<9> game(5.5f);
-    MCTSTree<9> tree(game, 1.5f, /*dir_alpha=*/0.11f, /*dir_eps=*/0.25f);
+    MCTSTree<9> tree(game, 1.5f, 0.11f, 0.25f);
 
-    // Expand root
     float policy[82];
-    // Give one action a very high prior
     hot_policy<9>(policy, 40, 0.99f);
     tree.expand(tree.root_idx, policy);
 
-    // Record priors before noise
     const MCTSNode& root = tree.nodes[tree.root_idx];
     float before_max = 0.0f;
-    for (int i = 0; i < root.num_children; ++i) {
+    for (int i = 0; i < root.num_children; ++i)
         before_max = std::max(before_max, tree.nodes[root.children_start + i].prior);
-    }
     assert(before_max > 0.9f);
 
-    // Apply noise
     std::mt19937 rng(42);
     tree.apply_dirichlet_noise(rng);
 
-    // After noise, the max prior should be reduced
     float after_max = 0.0f;
-    for (int i = 0; i < root.num_children; ++i) {
+    for (int i = 0; i < root.num_children; ++i)
         after_max = std::max(after_max, tree.nodes[root.children_start + i].prior);
-    }
     assert(after_max < before_max);
 
-    // Priors should still sum to ~1
     float sum = 0.0f;
-    for (int i = 0; i < root.num_children; ++i) {
+    for (int i = 0; i < root.num_children; ++i)
         sum += tree.nodes[root.children_start + i].prior;
-    }
     assert(std::abs(sum - 1.0f) < 0.01f);
 
-    // Noise should only be applied once
-    tree.apply_dirichlet_noise(rng);  // should be no-op
+    // Should be idempotent
+    tree.apply_dirichlet_noise(rng);
     float after2_max = 0.0f;
-    for (int i = 0; i < root.num_children; ++i) {
+    for (int i = 0; i < root.num_children; ++i)
         after2_max = std::max(after2_max, tree.nodes[root.children_start + i].prior);
-    }
     assert(std::abs(after2_max - after_max) < 1e-6f);
 
     printf("  PASS: Dirichlet noise (max prior %.3f -> %.3f)\n", before_max, after_max);
@@ -317,44 +282,39 @@ void test_policy_temperature() {
     Game<9> game(5.5f);
     MCTSTree<9> tree(game, 1.5f);
 
-    // Expand root
     float policy[82];
     uniform_policy<9>(policy);
     tree.expand(tree.root_idx, policy);
 
-    // Run sims with biased value to create visit imbalance
     std::mt19937 rng(42);
     for (int sim = 0; sim < 200; ++sim) {
-        auto leaves = tree.select_leaves(1);
-        const auto& leaf = leaves[0];
-        if (leaf.needs_nn) {
+        LeafInfo leaves[1];
+        tree.select_leaves(leaves, 1);
+        if (leaves[0].needs_nn) {
             float obs[17 * 81];
-            tree.fill_observations(leaves, obs);
+            tree.fill_observations(leaves, 1, obs);
             float p[82];
             uniform_policy<9>(p);
-            // Give slight preference to one child
-            float v = (tree.nodes[leaf.leaf_idx].action == 40) ? 0.8f : -0.3f;
-            tree.process_results(leaves, p, &v);
+            float v = (tree.nodes[leaves[0].leaf_idx].action == 40) ? 0.8f : -0.3f;
+            tree.process_results(leaves, 1, p, &v);
         } else {
-            tree.process_results(leaves, nullptr, nullptr);
+            tree.process_results(leaves, 1, nullptr, nullptr);
         }
     }
 
-    // Temperature 1.0: proportional
     float policy_t1[82];
     tree.get_policy(policy_t1, 1.0f);
     float sum_t1 = 0.0f;
     for (int i = 0; i < 82; ++i) sum_t1 += policy_t1[i];
     assert(std::abs(sum_t1 - 1.0f) < 1e-4f);
 
-    // Temperature 0.0: argmax
     float policy_t0[82];
     tree.get_policy(policy_t0, 0.0f);
     int non_zero = 0;
     for (int i = 0; i < 82; ++i) {
         if (policy_t0[i] > 0.5f) non_zero++;
     }
-    assert(non_zero == 1);  // exactly one action has all the mass
+    assert(non_zero == 1);
 
     printf("  PASS: policy temperature\n");
 }
@@ -371,38 +331,36 @@ void test_integration_random_game() {
     for (int move = 0; move < 120 && game.status == PLAYING; ++move) {
         MCTSTree<9> tree(game, 1.5f, 0.11f, 0.25f);
 
-        // Run 50 sims (fast, using random "NN")
-        // First: expand root
+        // Expand root
         float root_policy[82];
         uniform_policy<9>(root_policy);
         tree.expand(tree.root_idx, root_policy);
         tree.apply_dirichlet_noise(rng);
 
         // Backup root expansion
-        tree.backup({tree.root_idx}, vdist(rng));
+        int root_path[] = {tree.root_idx};
+        tree.backup(root_path, 1, vdist(rng));
 
         for (int sim = 0; sim < 50; ++sim) {
-            auto leaves = tree.select_leaves(1);
-            const auto& leaf = leaves[0];
-            if (leaf.needs_nn) {
+            LeafInfo leaves[1];
+            tree.select_leaves(leaves, 1);
+            if (leaves[0].needs_nn) {
                 float obs[17 * 81];
-                tree.fill_observations(leaves, obs);
+                tree.fill_observations(leaves, 1, obs);
                 float p[82];
                 uniform_policy<9>(p);
                 float v = vdist(rng);
-                tree.process_results(leaves, p, &v);
+                tree.process_results(leaves, 1, p, &v);
             } else {
-                tree.process_results(leaves, nullptr, nullptr);
+                tree.process_results(leaves, 1, nullptr, nullptr);
             }
         }
 
-        // Select best action
         int action = tree.best_action();
         assert(action >= 0 && action <= 81);
 
-        // Make the move
         int result = game.make_move(action);
-        assert(result >= 0);  // should always be legal
+        assert(result >= 0);
         moves_played++;
     }
 
@@ -416,21 +374,17 @@ void test_batch_leaves() {
     Game<9> game(5.5f);
     MCTSTree<9> tree(game, 1.5f);
 
-    // Expand root
     float policy[82];
     uniform_policy<9>(policy);
     tree.expand(tree.root_idx, policy);
 
-    // Collect 8 leaves
-    auto leaves = tree.select_leaves(8);
-    assert(leaves.size() == 8);
+    LeafInfo leaves[8];
+    tree.select_leaves(leaves, 8);
 
-    // Fill observations
     float obs_buffer[8 * 17 * 81];
-    int nn_count = tree.fill_observations(leaves, obs_buffer);
-    assert(nn_count == 8);  // all should need NN (first time)
+    int nn_count = tree.fill_observations(leaves, 8, obs_buffer);
+    assert(nn_count == 8);
 
-    // Create random results
     float policies[8 * 82];
     float values[8];
     std::mt19937 rng(42);
@@ -440,10 +394,7 @@ void test_batch_leaves() {
         values[i] = vdist(rng);
     }
 
-    // Process results
-    tree.process_results(leaves, policies, values);
-
-    // Root should have 8 visits
+    tree.process_results(leaves, 8, policies, values);
     assert(tree.root_visit_count() == 8);
 
     printf("  PASS: batch leaf collection (nn=%d, root_visits=%d)\n",
@@ -458,31 +409,29 @@ void test_tree_reuse_with_sims() {
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> vdist(-1.0f, 1.0f);
 
-    // Expand root and run sims
     float root_policy[82];
     uniform_policy<9>(root_policy);
     tree.expand(tree.root_idx, root_policy);
 
     for (int sim = 0; sim < 100; ++sim) {
-        auto leaves = tree.select_leaves(1);
+        LeafInfo leaves[1];
+        tree.select_leaves(leaves, 1);
         if (leaves[0].needs_nn) {
             float obs[17 * 81];
-            tree.fill_observations(leaves, obs);
+            tree.fill_observations(leaves, 1, obs);
             float p[82];
             uniform_policy<9>(p);
             float v = vdist(rng);
-            tree.process_results(leaves, p, &v);
+            tree.process_results(leaves, 1, p, &v);
         } else {
-            tree.process_results(leaves, nullptr, nullptr);
+            tree.process_results(leaves, 1, nullptr, nullptr);
         }
     }
 
-    // Play best action
     int action = tree.best_action();
     game.make_move(action);
     tree.advance(action);
 
-    // Continue running sims on reused tree
     if (!tree.nodes[tree.root_idx].is_expanded()) {
         float p[82];
         uniform_policy<9>(p);
@@ -490,24 +439,32 @@ void test_tree_reuse_with_sims() {
     }
 
     for (int sim = 0; sim < 50; ++sim) {
-        auto leaves = tree.select_leaves(1);
+        LeafInfo leaves[1];
+        tree.select_leaves(leaves, 1);
         if (leaves[0].needs_nn) {
             float obs[17 * 81];
-            tree.fill_observations(leaves, obs);
+            tree.fill_observations(leaves, 1, obs);
             float p[82];
             uniform_policy<9>(p);
             float v = vdist(rng);
-            tree.process_results(leaves, p, &v);
+            tree.process_results(leaves, 1, p, &v);
         } else {
-            tree.process_results(leaves, nullptr, nullptr);
+            tree.process_results(leaves, 1, nullptr, nullptr);
         }
     }
 
-    // Should have additional visits
     assert(tree.root_visit_count() > 0);
 
-    printf("  PASS: tree reuse with continued sims (root visits=%d, nodes=%d)\n",
-           tree.root_visit_count(), tree.num_nodes());
+    printf("  PASS: tree reuse with continued sims (root visits=%d, nodes=%d, game_states=%d)\n",
+           tree.root_visit_count(), tree.num_nodes(), tree.num_game_states());
+}
+
+// ─── Test 13: Node struct size ──────────────────────────────────
+
+void test_node_size() {
+    // Should be 32 bytes or less for cache efficiency
+    assert(sizeof(MCTSNode) <= 32);
+    printf("  PASS: MCTSNode is %zu bytes, alignof=%zu\n", sizeof(MCTSNode), alignof(MCTSNode));
 }
 
 // ─── Performance benchmark ──────────────────────────────────────
@@ -515,14 +472,13 @@ void test_tree_reuse_with_sims() {
 void bench_mcts() {
     printf("\n--- MCTS Benchmarks ---\n");
 
-    // Benchmark: MCTS simulations per second (9x9, random NN)
+    // 9x9 single-leaf
     {
         Game<9> game(5.5f);
         MCTSTree<9> tree(game, 1.5f);
         std::mt19937 rng(42);
         std::uniform_real_distribution<float> vdist(-1.0f, 1.0f);
 
-        // Expand root
         float root_policy[82];
         uniform_policy<9>(root_policy);
         tree.expand(tree.root_idx, root_policy);
@@ -531,16 +487,17 @@ void bench_mcts() {
         auto start = std::chrono::high_resolution_clock::now();
 
         for (int sim = 0; sim < total_sims; ++sim) {
-            auto leaves = tree.select_leaves(1);
+            LeafInfo leaves[1];
+            tree.select_leaves(leaves, 1);
             if (leaves[0].needs_nn) {
                 float obs[17 * 81];
-                tree.fill_observations(leaves, obs);
+                tree.fill_observations(leaves, 1, obs);
                 float p[82];
                 uniform_policy<9>(p);
                 float v = vdist(rng);
-                tree.process_results(leaves, p, &v);
+                tree.process_results(leaves, 1, p, &v);
             } else {
-                tree.process_results(leaves, nullptr, nullptr);
+                tree.process_results(leaves, 1, nullptr, nullptr);
             }
         }
 
@@ -548,10 +505,11 @@ void bench_mcts() {
         double ms = std::chrono::duration<double, std::milli>(end - start).count();
         printf("  9x9 MCTS: %d sims in %.1f ms (%.0f sims/sec, %.2f us/sim)\n",
                total_sims, ms, total_sims / (ms / 1000.0), ms * 1000.0 / total_sims);
-        printf("    nodes=%d, root_visits=%d\n", tree.num_nodes(), tree.root_visit_count());
+        printf("    nodes=%d, game_states=%d, root_visits=%d\n",
+               tree.num_nodes(), tree.num_game_states(), tree.root_visit_count());
     }
 
-    // Benchmark: batch leaf collection (8 leaves at a time)
+    // 9x9 batch=8
     {
         Game<9> game(5.5f);
         MCTSTree<9> tree(game, 1.5f);
@@ -568,10 +526,11 @@ void bench_mcts() {
 
         for (int sim = 0; sim < total_sims; sim += batch) {
             int b = std::min(batch, total_sims - sim);
-            auto leaves = tree.select_leaves(b);
+            LeafInfo leaves[8];
+            tree.select_leaves(leaves, b);
 
             float obs[8 * 17 * 81];
-            int nn = tree.fill_observations(leaves, obs);
+            int nn = tree.fill_observations(leaves, b, obs);
 
             float policies[8 * 82];
             float values[8];
@@ -579,7 +538,7 @@ void bench_mcts() {
                 uniform_policy<9>(policies + i * 82);
                 values[i] = vdist(rng);
             }
-            tree.process_results(leaves, policies, values);
+            tree.process_results(leaves, b, policies, values);
         }
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -588,7 +547,7 @@ void bench_mcts() {
                total_sims, ms, total_sims / (ms / 1000.0), ms * 1000.0 / total_sims);
     }
 
-    // Benchmark: 19x19 MCTS
+    // 19x19
     {
         Game<19> game(7.5f);
         MCTSTree<19> tree(game, 1.5f);
@@ -604,16 +563,17 @@ void bench_mcts() {
         auto start = std::chrono::high_resolution_clock::now();
 
         for (int sim = 0; sim < total_sims; ++sim) {
-            auto leaves = tree.select_leaves(1);
+            LeafInfo leaves[1];
+            tree.select_leaves(leaves, 1);
             if (leaves[0].needs_nn) {
                 float obs[17 * 361];
-                tree.fill_observations(leaves, obs);
+                tree.fill_observations(leaves, 1, obs);
                 float p[362];
                 for (int i = 0; i < 362; ++i) p[i] = v;
                 float val = vdist(rng);
-                tree.process_results(leaves, p, &val);
+                tree.process_results(leaves, 1, p, &val);
             } else {
-                tree.process_results(leaves, nullptr, nullptr);
+                tree.process_results(leaves, 1, nullptr, nullptr);
             }
         }
 
@@ -621,7 +581,47 @@ void bench_mcts() {
         double ms = std::chrono::duration<double, std::milli>(end - start).count();
         printf("  19x19 MCTS: %d sims in %.1f ms (%.0f sims/sec, %.2f us/sim)\n",
                total_sims, ms, total_sims / (ms / 1000.0), ms * 1000.0 / total_sims);
-        printf("    nodes=%d, root_visits=%d\n", tree.num_nodes(), tree.root_visit_count());
+        printf("    nodes=%d, game_states=%d, root_visits=%d\n",
+               tree.num_nodes(), tree.num_game_states(), tree.root_visit_count());
+    }
+
+    // 19x19 batch=8
+    {
+        Game<19> game(7.5f);
+        MCTSTree<19> tree(game, 1.5f);
+        std::mt19937 rng(42);
+        std::uniform_real_distribution<float> vdist(-1.0f, 1.0f);
+
+        float root_policy[362];
+        float v = 1.0f / 362.0f;
+        for (int i = 0; i < 362; ++i) root_policy[i] = v;
+        tree.expand(tree.root_idx, root_policy);
+
+        int total_sims = 5000;
+        int batch = 8;
+        auto start = std::chrono::high_resolution_clock::now();
+
+        for (int sim = 0; sim < total_sims; sim += batch) {
+            int b = std::min(batch, total_sims - sim);
+            LeafInfo leaves[8];
+            tree.select_leaves(leaves, b);
+
+            float obs[8 * 17 * 361];
+            int nn = tree.fill_observations(leaves, b, obs);
+
+            float policies[8 * 362];
+            float values[8];
+            for (int i = 0; i < nn; ++i) {
+                for (int j = 0; j < 362; ++j) policies[i * 362 + j] = v;
+                values[i] = vdist(rng);
+            }
+            tree.process_results(leaves, b, policies, values);
+        }
+
+        auto end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        printf("  19x19 MCTS (batch=8): %d sims in %.1f ms (%.0f sims/sec, %.2f us/sim)\n",
+               total_sims, ms, total_sims / (ms / 1000.0), ms * 1000.0 / total_sims);
     }
 }
 
@@ -630,6 +630,7 @@ void bench_mcts() {
 int main() {
     printf("=== MCTS C++ Tests ===\n\n");
 
+    test_node_size();
     test_tree_creation();
     test_expand_root();
     test_puct_selection();

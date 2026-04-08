@@ -553,16 +553,25 @@ Implemented in `mcts.h` (header-only logic) + `mcts.cpp` (template instantiation
 3. **Dirichlet noise** at root (`apply_dirichlet_noise()`)
 4. **Virtual loss** — batch leaf collection (8 leaves/tick yields 8 unique paths)
 5. **Tree reuse** — `advance(action)` promotes subtree
-6. **Game state storage** — `unordered_map<int, Game<N>>` (only expanded nodes, not all children)
+6. **Game state storage** — `deque<Game<N>>` indexed by `MCTSNode::game_idx` (only expanded nodes)
 7. **pybind11 bindings** — `MCTSTree9/13/19` exposed to Python
+
+#### Performance optimizations (v3)
+
+- `deque<Game<N>>` instead of `unordered_map` or `vector` — no hash overhead, no reallocation copies
+- `MCTSNode::is_terminal` flag — avoids game-state lookup in `select_leaf` traversal
+- `MCTSNode::game_idx` — O(1) game state access vs O(1) amortized hash lookup
+- Fixed-size `LeafInfo` path buffer (64 ints) — no heap allocation per leaf
+- Bulk child allocation in `expand()` — single `resize()` instead of N `emplace_back()`
 
 #### MCTS Benchmark Results
 
 | Metric | 9x9 | 19x19 |
 |--------|-----|-------|
-| Sims/sec (single leaf) | **170K** | **60K** |
-| Sims/sec (batch=8) | **223K** | — |
-| Time per sim | **5.9μs** | **16.8μs** |
+| Sims/sec (single leaf) | **215K** | **77K** |
+| Sims/sec (batch=8) | **312K** | **92K** |
+| Time per sim (single) | **4.7μs** | **13.0μs** |
+| Time per sim (batch=8) | **3.2μs** | **10.8μs** |
 
 Per-leaf cost is well under the 2.5μs CPU budget from PLAN.md (the sim cost includes
 tree traversal + game state copy + expand + backup, not just place_stone).
