@@ -19,7 +19,7 @@ The naive cost estimate (800 sims × millions of moves = billions of NN calls = 
 
 ### The GPU Batching Trick
 
-A single A100 forward pass takes ~0.3ms whether batch=1 or batch=256. So:
+A single GPU forward pass takes ~0.3ms whether batch=1 or batch=256. So:
 
 ```
 ❌ Sequential thinking:
@@ -48,18 +48,12 @@ The **real bottleneck is CPU** — MCTS tree traversal, game state copying, capt
 
 **~$0.44/hr — 8-16 vCPUs, 32-64GB RAM, 24GB VRAM.**
 
-A100 80GB ($1.19/hr) is massive overkill — our models need <10GB VRAM:
-- 47M model (BF16) inference at batch=2048: ~900MB peak
-- Training (batch=256): ~5GB peak
-- Combined: ~10GB — fits easily in 24GB
+Our largest model (23M) needs <10GB VRAM total (inference + training), so the
+4090's 24GB is plenty. BF16 tensor core throughput (~330 TFLOPS) is more than
+enough for our model sizes. **CPU is the actual bottleneck** — see Cost Estimates.
 
-The 4090 matches A100 on BF16 tensor core throughput (~330 vs 312 TFLOPS) for
-our small models. Memory bandwidth (1 TB/s vs 2 TB/s) doesn't matter since
-inference is compute-bound at batch=2048. **2.7x cheaper per hour, same speed.**
-
-CPU is the actual bottleneck (see Revised Cost Estimates below), so the 4090's
-comparable vCPU count is fine. RAM constraint: keep replay buffer at 500K-1M
-positions (~7-15GB) rather than 2M (~30GB).
+RAM constraint: keep replay buffer at 500K-1M positions (~7-15GB) to fit
+comfortably in 32-64GB system RAM.
 
 ### Process Architecture (8 vCPUs)
 
@@ -111,106 +105,22 @@ Communication:
 
 ---
 
-## Original Cost Estimates (8 vCPUs, pre-benchmark)
+## Cost Estimates (RTX 4090, Based on Actual Benchmarks)
 
-### CPU Work Per Leaf (C++)
-
-| Operation | 9x9 | 19x19 |
-|-----------|------|-------|
-| MCTS tree traversal + VL | ~0.2μs | ~0.2μs |
-| Game state clone | ~0.5μs | ~2μs |
-| Node expand + backup | ~0.2μs | ~0.2μs |
-| **Total per leaf** | **~1μs** | **~2.5μs** |
-
-### Per Tick (256 games × 8 VL = 2,048 leaves)
-
-| | 9x9 | 19x19 |
-|---|---|---|
-| CPU work (single thread) | 2,048 × 1μs = 2ms | 2,048 × 2.5μs = 5ms |
-| CPU work (5 C++ workers) | **0.4ms** | **1ms** |
-| GPU forward pass (batch=2048, BF16) | **0.5ms** | **0.5ms** |
-| Sync + shared memory overhead | ~0.2ms | ~0.2ms |
-| **Effective time per tick** | **~0.7ms** | **~1.2ms** |
-
-Note: 5M model. GPU and CPU roughly balanced.
-For 47M model, GPU per tick rises to ~3ms → GPU becomes bottleneck, CPU has headroom.
-
-### 9x9 Go: 400 sims/move
-
-| Component | Estimate |
-|-----------|----------|
-| Ticks per move (400 sims / 8 VL) | 50 |
-| Ticks per game (50 × 60 moves) | 3,000 |
-| Time per 256 games (3,000 × 0.7ms) | **2.1 sec** |
-| Realistic (3x overhead: Python↔C++, mem, sync) | **~6 sec** |
-| **Throughput** | **~150K games/hr** |
-| 25K games self-play | ~10 min |
-| + training (100 iters × 100 steps) | ~20 min |
-| + eval games | ~5 min |
-| **Total per run** | **~35 min** |
-| **Cost: 0.6 hrs × $1.19** | **~$0.7** |
-| Budget for 10+ experiment runs | **< $10** |
-
-### 19x19 Go: 800 sims/move, 5M model
-
-| Component | Estimate |
-|-----------|----------|
-| Ticks per move (800 / 8) | 100 |
-| Ticks per game (100 × 220 moves) | 22,000 |
-| Time per 256 games (22,000 × 1.2ms) | **26 sec** |
-| Realistic (3x overhead) | **~80 sec** |
-| **Throughput** | **~11.5K games/hr** |
-| 80K games self-play | ~7 hours |
-| + training | ~3 hours |
-| + resign savings (-20%) | ~-2 hours |
-| **Total per run** | **~8 hours** |
-| **Cost: 8 hrs × $1.19** | **~$10** |
-
-### 19x19 Go: 800 sims/move, 47M model
-
-| Component | Estimate |
-|-----------|----------|
-| GPU per tick (batch=2048, BF16, 47M) | ~3ms (GPU bottleneck) |
-| Time per 256 games (22,000 × 3ms) | **66 sec** |
-| Realistic (2x — less CPU overhead since GPU is bottleneck) | **~130 sec** |
-| **Throughput** | **~7K games/hr** |
-| 80K games + training | **~14 hours** |
-| **Cost: 14 hrs × $1.19** | **~$17** |
-
-### Total Budget
-
-| Phase | Cost/run | Runs | Total |
-|-------|----------|------|-------|
-| 9x9 (5M, 400 sims) | ~$0.7 | 10 | **~$7** |
-| 19x19 (5M, 800 sims) | ~$10 | 3 | **~$30** |
-| 19x19 (47M, 800 sims) | ~$17 | 2 | **~$34** |
-| **Grand Total** | | | **~$71** |
-
-Full 400-800 sim MCTS, both model sizes, 15 total runs, under $100.
-The 8 vCPUs are sufficient because C++ MCTS is fast and GPU is the bottleneck for the larger model.
-
----
-
-## Revised Cost Estimates (Based on Actual Benchmarks + RTX 4090)
-
-> Added after completing Steps 1-6 (C++ engine + MCTS). Benchmarks from Apple M1, -O3.
+> Benchmarks from Apple M1, -O3, after completing Steps 1-6 (C++ engine + MCTS).
 > RunPod x86 CPUs (AMD EPYC / Intel Xeon) expected to be within ±20% of M1 single-core.
-> Hardware switched from A100 ($1.19/hr) to RTX 4090 ($0.44/hr) — same GPU speed, 2.7x cheaper.
 
-### What Changed: Per-Leaf Cost is 3-4x Higher Than Estimated
+### Per-Sim CPU Cost (MCTS Benchmark)
 
-The original estimates modeled per-leaf CPU cost as just engine operations
-(clone + place_stone + check). The actual MCTS sim cost includes significant
-overhead from tree traversal, game state management (deque indexing, full
-Game<N> copy with history), node allocation, and backup propagation.
+Full sim cost includes tree traversal, Game<N> state copy (with 8-position
+history), deque-based state storage, node allocation, and backup propagation.
 
-| | 9x9 Est. | 9x9 Actual | 19x19 Est. | 19x19 Actual |
-|---|---|---|---|---|
-| Per-leaf CPU cost | 1.0μs | **3.2μs** | 2.5μs | **10.8μs** |
-| Ratio | | **3.2x** | | **4.3x** |
+| | 9x9 | 13x13 (est.) | 19x19 |
+|---|---|---|---|
+| Per-sim CPU cost | **3.2μs** | **~5.5μs** | **10.8μs** |
 
 Source: MCTS benchmark, batch=8 virtual loss, DESIGN.md Step 6 results.
-13x13 estimated by interpolation: ~5.5μs per sim.
+13x13 interpolated from board area (169 cells vs 81/361).
 
 ### Per Tick (256 games × 8 VL = 2,048 leaves)
 
@@ -279,23 +189,14 @@ which is why larger models (7M, 23M) don't hurt throughput.
 the main training target with the most complex pure self-play task. Plenty of
 headroom to add more games or runs if results look promising.
 
-### Why the Original Per-Leaf Estimate Was Off
+### Possible Optimizations
 
-1. **Per-leaf cost only counted engine ops** — tree traversal, deque indexing,
-   Game<N> copy with 8-position history, and node allocation were not accounted for
-2. **Game<19> is larger than Board<19>** — the Game struct stores history arrays
-   (8 × 361 = 2.9KB extra), making each clone ~6KB not ~3KB
-3. **deque<Game<N>> access pattern** — non-contiguous memory for game state storage
-   adds cache pressure vs the theoretical minimum
-
-### Optional: Further Optimizations
-
-The CPU hot path can still be optimized during Step 7 (SelfPlayWorker):
+The CPU hot path can be optimized during Step 4 (SelfPlayWorker):
 - **Lazy history copy**: only copy history when encoding observations, not on every clone
 - **Contiguous arena for game states**: replace `deque<Game<N>>` with a flat arena
 - **Increase VL batch from 8 to 16**: amortize per-tick sync overhead
 
-A 2x reduction in per-sim cost would bring the total to ~$20.
+A 2x reduction in per-sim cost would bring the total to ~$22.
 
 ---
 
