@@ -7,7 +7,7 @@ Build AlphaZero from scratch for the game of Go.
 - **9x9 and 13x13**: Pure self-play from scratch — the true "Zero" approach
 - **19x19**: Proper architecture with human pretraining — build it right, train it exploratory
 
-**Budget: total < $100.** Target ~$36, leaving headroom for extra experiments.
+**Budget: total < $100.** Target ~$44, leaving ~$56 headroom for extra experiments.
 
 Season 5 finale — from RL basics all the way to AlphaZero on Go.
 
@@ -235,26 +235,26 @@ which is why larger models (7M, 23M) don't hurt throughput.
 
 ### Per-Phase Cost (RTX 4090 at $0.44/hr)
 
-**Phase 1 — 9x9 pure self-play (200K games/run)**:
+**Phase 1 — 9x9 pure self-play (150K games/run)**:
 
 | Component | Estimate |
 |-----------|----------|
-| Self-play: 200K / 77K games/hr | ~2.6h |
+| Self-play: 150K / 77K games/hr | ~2.0h |
 | Training | ~0.5h |
-| **Total per run** | **~3h** |
-| **Cost per run** | **~$1.4** |
+| **Total per run** | **~2.5h** |
+| **Cost per run** | **~$1.1** |
 
-**Phase 2 — 13x13 pure self-play (150K games/run)**:
+**Phase 2 — 13x13 pure self-play (200K games/run)**:
 
 | Component | Estimate |
 |-----------|----------|
-| Self-play: 150K / 16K games/hr | ~9.4h |
-| Training | ~1.5h |
-| Resign savings (-15%) | ~-1.5h |
-| **Total per run** | **~9.5h** |
-| **Cost per run** | **~$4.2** |
+| Self-play: 200K / 16K games/hr | ~12.5h |
+| Training | ~2h |
+| Resign savings (-15%) | ~-2h |
+| **Total per run** | **~12.5h** |
+| **Cost per run** | **~$5.5** |
 
-Note: resign savings are modest for 13x13 — shorter games, less waste from lost positions.
+13x13 gets more games than 9x9 — bigger board, more complex patterns to learn from scratch.
 
 **Phase 3 — 19x19 pretrained + self-play (30K games/run)**:
 
@@ -270,14 +270,14 @@ Note: resign savings are modest for 13x13 — shorter games, less waste from los
 
 | Phase | Cost/run | Runs | Total |
 |-------|----------|------|-------|
-| 9x9 pure self-play (5M, 200K games) | ~$1.4 | 8 | **~$11** |
-| 13x13 pure self-play (7M, 150K games) | ~$4.2 | 5 | **~$21** |
+| 9x9 pure self-play (5M, 150K games) | ~$1.1 | 8 | **~$9** |
+| 13x13 pure self-play (7M, 200K games) | ~$5.5 | 5 | **~$28** |
 | 19x19 pretrained (23M, 30K games) | ~$3.5 | 2 | **~$7** |
-| **Grand Total** | | **15** | **~$39** |
+| **Grand Total** | | **15** | **~$44** |
 
-**~$39 total, ~$61 headroom.** If 9x9 or 13x13 show promise, we can double the
-game count for a few extra dollars. If 19x19 pretraining works well, we can add
-more self-play runs cheaply.
+**~$44 total, ~$56 headroom.** 13x13 gets the lion's share of the budget — it's
+the main training target with the most complex pure self-play task. Plenty of
+headroom to add more games or runs if results look promising.
 
 ### Why the Original Per-Leaf Estimate Was Off
 
@@ -312,7 +312,7 @@ A 2x reduction in per-sim cost would bring the total to ~$20.
 
 ## Training Pipeline
 
-### Phase 1: 9x9 Pure Self-Play (1x RTX 4090, ~$1.4/run)
+### Phase 1: 9x9 Pure Self-Play (1x RTX 4090, ~$1.1/run)
 
 **No pretraining — learns Go from scratch.** The model starts with random weights
 and discovers captures, eyes, territory, and strategy entirely through self-play.
@@ -326,9 +326,9 @@ This is the true AlphaZero/"Zero" approach.
 | MCTS sims/move | 400 |
 | Virtual loss batch | 8 |
 | Parallel games | 256 (5 workers × ~52) |
-| Games per run | 200K |
+| Games per run | 150K |
 | Positions/game (×8 symmetry) | 60 × 8 = 480 |
-| Total positions per run | **96M** |
+| Total positions per run | **72M** |
 | Replay buffer | 500K positions |
 | Train batch size | 256 |
 | Train steps per iter | 100 |
@@ -341,7 +341,7 @@ This is the true AlphaZero/"Zero" approach.
 
 **Targets**: >95% vs Random, >80% vs pure MCTS, beat GnuGo lv10.
 
-### Phase 2: 13x13 Pure Self-Play (1x RTX 4090, ~$3.5/run)
+### Phase 2: 13x13 Pure Self-Play (1x RTX 4090, ~$5.6/run)
 
 **Also pure self-play from scratch.** 13x13 is the sweet spot — big enough for
 real strategy (joseki, influence, territory balance, middle-game fighting), small
@@ -353,9 +353,9 @@ enough to train well. It's a real competitive format on many online Go servers.
 | MCTS sims/move | 600 |
 | Virtual loss batch | 8 |
 | Parallel games | 256 |
-| Games per run | 150K |
+| Games per run | 200K |
 | Positions/game (×8 symmetry) | 120 × 8 = 960 |
-| Total positions per run | **144M** |
+| Total positions per run | **192M** |
 | Replay buffer | 1M positions |
 | Dirichlet alpha/epsilon | 0.07 / 0.25 |
 | Komi | 7.5 |
@@ -530,8 +530,8 @@ def augment_8fold(obs, policy_map, value):
     return augmented  # 8 samples from 1 position
 ```
 
-200K games × 60 moves × 8 = **96M training positions** (9x9 pure self-play).
-150K games × 120 moves × 8 = **144M training positions** (13x13 pure self-play).
+150K games × 60 moves × 8 = **72M training positions** (9x9 pure self-play).
+200K games × 120 moves × 8 = **192M training positions** (13x13 pure self-play).
 30K games × 220 moves × 8 = **53M training positions** (19x19 pretrained + self-play).
 
 ### 5. Replay Buffer
@@ -657,15 +657,15 @@ AlphaZero/
 - Resign threshold, tree reuse
 - Local smoke test with tiny model on 9x9
 
-### Step 5: Cloud Training — 9x9 Pure Self-Play (~$11)
+### Step 5: Cloud Training — 9x9 Pure Self-Play (~$9)
 - Rent 1x RTX 4090 24GB on RunPod ($0.44/hr)
-- Pure self-play from scratch: 400 sims, 10b×128ch (5M), 200K games
+- Pure self-play from scratch: 400 sims, 10b×128ch (5M), 150K games
 - Eval vs GnuGo
 - ~8 runs of experimentation
 
-### Step 6: Cloud Training — 13x13 Pure Self-Play (~$21)
+### Step 6: Cloud Training — 13x13 Pure Self-Play (~$28)
 - Same RTX 4090, pure self-play from scratch
-- 600 sims, 15b×128ch (7M), 150K games
+- 600 sims, 15b×128ch (7M), 200K games
 - Eval vs GnuGo
 - ~5 runs of experimentation
 
