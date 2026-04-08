@@ -1,9 +1,10 @@
-// pybind11 bindings for Go engine.
+// pybind11 bindings for Go engine + MCTS.
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 #include "go.h"
+#include "mcts.h"
 
 namespace py = pybind11;
 
@@ -107,6 +108,106 @@ void bind_game(py::module_& m, const char* name) {
         ;
 }
 
+template<int N>
+void bind_mcts(py::module_& m, const char* name) {
+    using Tree = mcts::MCTSTree<N>;
+    using G = go::Game<N>;
+
+    py::class_<Tree>(m, name)
+        .def(py::init<const G&, float, float, float>(),
+             py::arg("game"),
+             py::arg("c_puct") = 1.5f,
+             py::arg("dirichlet_alpha") = 0.03f,
+             py::arg("dirichlet_epsilon") = 0.25f)
+
+        // Run N simulations with a callable NN evaluator.
+        // evaluator(obs_batch) -> (policies, values)
+        .def("run_simulations", [](Tree& tree, int num_sims, int leaves_per_sim,
+                                    py::function evaluator, bool add_noise, int seed) {
+            std::mt19937 rng(seed);
+
+            for (int sim = 0; sim < num_sims; sim += leaves_per_sim) {
+                int batch = std::min(leaves_per_sim, num_sims - sim);
+
+                // Select leaves
+                auto leaves = tree.select_leaves(batch);
+
+                // Apply Dirichlet noise on first expansion of root
+                if (add_noise && sim == 0 && tree.nodes[tree.root_idx].is_expanded()) {
+                    tree.apply_dirichlet_noise(rng);
+                }
+
+                // Fill observations for leaves needing NN
+                int nn_count = 0;
+                for (const auto& l : leaves) if (l.needs_nn) nn_count++;
+
+                if (nn_count > 0) {
+                    py::array_t<float> obs_batch({nn_count, 17, N, N});
+                    tree.fill_observations(leaves, obs_batch.mutable_data());
+
+                    // Call Python evaluator
+                    py::tuple result = evaluator(obs_batch);
+                    py::array_t<float> policies = result[0].cast<py::array_t<float>>();
+                    py::array_t<float> values = result[1].cast<py::array_t<float>>();
+
+                    tree.process_results(leaves, policies.data(), values.data());
+                } else {
+                    // All terminal — backup directly
+                    tree.process_results(leaves, nullptr, nullptr);
+                }
+
+                // Apply noise after first expansion
+                if (add_noise && !tree.root_noise_applied
+                    && tree.nodes[tree.root_idx].is_expanded()) {
+                    tree.apply_dirichlet_noise(rng);
+                }
+            }
+        }, py::arg("num_sims"), py::arg("leaves_per_sim") = 8,
+           py::arg("evaluator") = py::none(),
+           py::arg("add_noise") = true, py::arg("seed") = 42)
+
+        // Get leaf observations for external NN evaluation
+        .def("select_leaves", [](Tree& tree, int n) {
+            auto leaves = tree.select_leaves(n);
+            int nn_count = 0;
+            for (const auto& l : leaves) if (l.needs_nn) nn_count++;
+
+            py::array_t<float> obs({nn_count, 17, N, N});
+            tree.fill_observations(leaves, obs.mutable_data());
+
+            // Return obs and leaf info for process_results
+            // Store leaves internally for the next process_results call
+            return py::make_tuple(obs, nn_count);
+        }, py::arg("num_leaves") = 8)
+
+        // Get policy from visit counts
+        .def("get_policy", [](const Tree& tree, float temperature) {
+            py::array_t<float> policy(Tree::ACTIONS);
+            tree.get_policy(policy.mutable_data(), temperature);
+            return policy;
+        }, py::arg("temperature") = 1.0f)
+
+        .def("best_action", &Tree::best_action)
+
+        .def("advance", [](Tree& tree, int action) {
+            tree.advance(action);
+        }, py::arg("action"))
+
+        .def("advance_rc", [](Tree& tree, int row, int col) {
+            tree.advance(row * N + col);
+        }, py::arg("row"), py::arg("col"))
+
+        .def("reset", &Tree::reset, py::arg("game"))
+
+        // Stats
+        .def_property_readonly("root_visit_count", &Tree::root_visit_count)
+        .def_property_readonly("root_value", &Tree::root_value)
+        .def_property_readonly("num_nodes", &Tree::num_nodes)
+        .def("root_children_visits", &Tree::root_children_visits)
+        .def("root_children_q", &Tree::root_children_q)
+        ;
+}
+
 PYBIND11_MODULE(go_engine, m) {
     m.doc() = "High-performance C++ Go engine for AlphaZero training";
 
@@ -125,4 +226,8 @@ PYBIND11_MODULE(go_engine, m) {
     bind_game<9>(m, "Game9");
     bind_game<13>(m, "Game13");
     bind_game<19>(m, "Game19");
+
+    bind_mcts<9>(m, "MCTSTree9");
+    bind_mcts<13>(m, "MCTSTree13");
+    bind_mcts<19>(m, "MCTSTree19");
 }
