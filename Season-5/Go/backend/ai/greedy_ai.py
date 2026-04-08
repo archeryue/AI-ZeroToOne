@@ -1,7 +1,7 @@
 """Greedy AI: prioritizes captures, influence, and center control."""
 
 import random
-from engine.board import Stone
+from engine.board import Stone, RESIGN
 from engine.game import Game
 from .base import BaseAI
 
@@ -13,6 +13,11 @@ class GreedyAI(BaseAI):
             return (-1, -1)
 
         color = game.current_turn
+
+        # Resign check — invoke MC Score Estimation periodically
+        if self._should_invoke_resign_check(game) and self._should_resign(game, color):
+            return RESIGN
+
         scored: list[tuple[float, tuple[int, int]]] = []
 
         for r, c in legal:

@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
-from engine.board import Stone
+from engine.board import Stone, RESIGN
 from engine.game import GameStatus
 from .game_manager import game_manager
 
@@ -40,9 +40,14 @@ def create_game(req: CreateGameRequest):
     # If AI plays first (player is white, AI is black)
     if session.ai and session.ai_color == Stone.BLACK:
         ai_move = session.ai.choose_move(session.game)
-        session.game.make_move(ai_move[0], ai_move[1])
-        result["game_state"] = session.to_state_dict()
-        result["ai_move"] = {"row": ai_move[0], "col": ai_move[1]}
+        if ai_move == RESIGN:
+            session.game.resign(session.ai_color)
+            result["game_state"] = session.to_state_dict()
+            result["ai_resigned"] = True
+        else:
+            session.game.make_move(ai_move[0], ai_move[1])
+            result["game_state"] = session.to_state_dict()
+            result["ai_move"] = {"row": ai_move[0], "col": ai_move[1]}
 
     return result
 
@@ -75,9 +80,14 @@ def make_move(game_id: str, req: MoveRequest):
     # AI responds
     if session.ai and game.status == GameStatus.PLAYING and game.current_turn == session.ai_color:
         ai_move = session.ai.choose_move(game)
-        game.make_move(ai_move[0], ai_move[1])
-        result["game_state"] = session.to_state_dict()
-        result["ai_move"] = {"row": ai_move[0], "col": ai_move[1], "is_pass": ai_move == (-1, -1)}
+        if ai_move == RESIGN:
+            game.resign(session.ai_color)
+            result["game_state"] = session.to_state_dict()
+            result["ai_resigned"] = True
+        else:
+            game.make_move(ai_move[0], ai_move[1])
+            result["game_state"] = session.to_state_dict()
+            result["ai_move"] = {"row": ai_move[0], "col": ai_move[1], "is_pass": ai_move == (-1, -1)}
 
     return result
 
@@ -98,9 +108,14 @@ def pass_move(game_id: str):
     # AI responds
     if session.ai and game.status == GameStatus.PLAYING and game.current_turn == session.ai_color:
         ai_move = session.ai.choose_move(game)
-        game.make_move(ai_move[0], ai_move[1])
-        result["game_state"] = session.to_state_dict()
-        result["ai_move"] = {"row": ai_move[0], "col": ai_move[1], "is_pass": ai_move == (-1, -1)}
+        if ai_move == RESIGN:
+            game.resign(session.ai_color)
+            result["game_state"] = session.to_state_dict()
+            result["ai_resigned"] = True
+        else:
+            game.make_move(ai_move[0], ai_move[1])
+            result["game_state"] = session.to_state_dict()
+            result["ai_move"] = {"row": ai_move[0], "col": ai_move[1], "is_pass": ai_move == (-1, -1)}
 
     return result
 

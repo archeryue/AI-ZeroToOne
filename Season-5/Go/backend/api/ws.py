@@ -5,7 +5,7 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from engine.board import Stone
+from engine.board import Stone, RESIGN
 from engine.game import GameStatus
 from .game_manager import game_manager
 
@@ -83,21 +83,7 @@ async def _handle_move(websocket, session, msg):
 
     # AI turn
     if session.ai and game.status == GameStatus.PLAYING and game.current_turn == session.ai_color:
-        await websocket.send_json({"type": "ai_thinking"})
-
-        loop = asyncio.get_event_loop()
-        ai_move = await loop.run_in_executor(None, session.ai.choose_move, game)
-
-        game.make_move(ai_move[0], ai_move[1])
-
-        await websocket.send_json({
-            "type": "ai_move",
-            "data": {"row": ai_move[0], "col": ai_move[1], "is_pass": ai_move == (-1, -1)},
-        })
-        await websocket.send_json({
-            "type": "game_state",
-            "data": session.to_state_dict(),
-        })
+        await _ai_respond(websocket, session)
 
 
 async def _handle_pass(websocket, session):
@@ -115,21 +101,36 @@ async def _handle_pass(websocket, session):
 
     # AI turn
     if session.ai and game.status == GameStatus.PLAYING and game.current_turn == session.ai_color:
-        await websocket.send_json({"type": "ai_thinking"})
+        await _ai_respond(websocket, session)
 
-        loop = asyncio.get_event_loop()
-        ai_move = await loop.run_in_executor(None, session.ai.choose_move, game)
 
+async def _ai_respond(websocket, session):
+    """Let the AI make its move, handling normal play and resign."""
+    game = session.game
+    await websocket.send_json({"type": "ai_thinking"})
+
+    loop = asyncio.get_event_loop()
+    ai_move = await loop.run_in_executor(None, session.ai.choose_move, game)
+
+    if ai_move == RESIGN:
+        game.resign(session.ai_color)
+        await websocket.send_json({
+            "type": "ai_resign",
+            "data": {
+                "color": "black" if session.ai_color == Stone.BLACK else "white",
+            },
+        })
+    else:
         game.make_move(ai_move[0], ai_move[1])
-
         await websocket.send_json({
             "type": "ai_move",
             "data": {"row": ai_move[0], "col": ai_move[1], "is_pass": ai_move == (-1, -1)},
         })
-        await websocket.send_json({
-            "type": "game_state",
-            "data": session.to_state_dict(),
-        })
+
+    await websocket.send_json({
+        "type": "game_state",
+        "data": session.to_state_dict(),
+    })
 
 
 async def _handle_undo(websocket, session):

@@ -9,7 +9,7 @@ import random
 import time
 from typing import Optional
 
-from engine.board import Stone, PASS
+from engine.board import Stone, PASS, RESIGN
 from engine.game import Game, GameStatus
 from .base import BaseAI
 
@@ -41,6 +41,9 @@ class MCTSNode:
 
 
 class MCTSAI(BaseAI):
+    # MCTS uses its own win rate — resign when below this threshold
+    RESIGN_WIN_RATE_THRESHOLD = 0.10
+
     def __init__(self, simulations: int = 500, max_time: float = 5.0):
         self.simulations = simulations
         self.max_time = max_time
@@ -61,6 +64,10 @@ class MCTSAI(BaseAI):
         root = MCTSNode(parent=None, move=PASS, untried_moves=all_moves[:])
 
         start_time = time.time()
+        # Track overall win rate for resign evaluation
+        total_rollouts = 0
+        total_wins = 0.0
+
         for i in range(self.simulations):
             if time.time() - start_time > self.max_time:
                 break
@@ -101,6 +108,8 @@ class MCTSAI(BaseAI):
 
             # Simulation (random rollout)
             result = self._rollout(sim_game, root_color)
+            total_rollouts += 1
+            total_wins += result
 
             # Backpropagation
             while node is not None:
@@ -114,7 +123,19 @@ class MCTSAI(BaseAI):
             return random.choice(legal) if legal else PASS
 
         best = root.most_visited_child()
+
+        # --- Resign check (uses MCTS win rate — essentially free) ---
+        if total_rollouts > 0 and self._should_invoke_resign_check(game):
+            win_rate = total_wins / total_rollouts
+            if win_rate < self.RESIGN_WIN_RATE_THRESHOLD:
+                return RESIGN
+
         return best.move
+
+    def _should_invoke_resign_check(self, game: Game) -> bool:
+        """MCTS can check every move since win rate is already computed."""
+        move_count = len(game.move_history)
+        return move_count >= max(20, game.size * 2)
 
     def _rollout(self, game: Game, root_color: int, max_moves: int = 200) -> float:
         """Random playout until game ends or max_moves reached."""
@@ -153,21 +174,6 @@ class MCTSAI(BaseAI):
                 return 1.0 if black_score > white_score else 0.0
             else:
                 return 1.0 if white_score > black_score else 0.0
-
-    def _clone_game(self, game: Game) -> Game:
-        """Lightweight clone of game for simulation."""
-        g = Game.__new__(Game)
-        g.board = game.board.copy()
-        g.size = game.size
-        g.komi = game.komi
-        g.current_turn = game.current_turn
-        g.status = game.status
-        g.move_history = []
-        g.board_history = []
-        g.captured = dict(game.captured)
-        g.consecutive_passes = game.consecutive_passes
-        g.final_score = None
-        return g
 
     @property
     def name(self) -> str:

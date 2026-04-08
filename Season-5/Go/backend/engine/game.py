@@ -32,6 +32,7 @@ class Game:
         self.captured: dict[int, int] = {Stone.BLACK: 0, Stone.WHITE: 0}  # prisoners taken BY each color
         self.consecutive_passes = 0
         self.final_score: Optional[tuple[float, float]] = None
+        self.resigned_by: Optional[int] = None
 
     def make_move(self, row: int, col: int) -> dict:
         """Make a move (place stone or pass).
@@ -99,6 +100,7 @@ class Game:
 
     def resign(self, color: int):
         """Player resigns."""
+        self.resigned_by = color
         if color == Stone.BLACK:
             self.status = GameStatus.WHITE_WIN
         else:
@@ -187,6 +189,9 @@ class Game:
             },
             "komi": self.komi,
         }
+
+        if self.resigned_by is not None:
+            result["resigned_by"] = "black" if self.resigned_by == Stone.BLACK else "white"
 
         if self.final_score is not None:
             result["score"] = {

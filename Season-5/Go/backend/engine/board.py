@@ -32,6 +32,9 @@ class Stone(IntEnum):
 # Sentinel for "pass" move
 PASS = (-1, -1)
 
+# Sentinel for "resign" move
+RESIGN = (-2, -2)
+
 
 class Board:
     """Go board with full rule enforcement."""
