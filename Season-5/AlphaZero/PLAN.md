@@ -41,16 +41,27 @@ With **virtual loss** (collect 8 leaves per game per tick):
 
 The **real bottleneck is CPU** — MCTS tree traversal, game state copying, capture checking. This is why the **C++ engine is critical**. With C++ MCTS + engine, CPU cost per tick ≈ 2-10ms (depending on board size and thread count).
 
-### Hardware: RunPod A100 80GB PCIe
+### Hardware: RunPod RTX 4090 24GB
 
-**$1.19/hr — 8 vCPUs, 117GB RAM, 80GB VRAM.**
+**~$0.44/hr — 8-16 vCPUs, 32-64GB RAM, 24GB VRAM.**
 
-8 vCPUs is lean but sufficient. C++ MCTS is fast enough that 5 worker processes handle 256 parallel games easily. The GPU is the bottleneck for larger models, not CPU.
+A100 80GB ($1.19/hr) is massive overkill — our models need <10GB VRAM:
+- 47M model (BF16) inference at batch=2048: ~900MB peak
+- Training (batch=256): ~5GB peak
+- Combined: ~10GB — fits easily in 24GB
+
+The 4090 matches A100 on BF16 tensor core throughput (~330 vs 312 TFLOPS) for
+our small models. Memory bandwidth (1 TB/s vs 2 TB/s) doesn't matter since
+inference is compute-bound at batch=2048. **2.7x cheaper per hour, same speed.**
+
+CPU is the actual bottleneck (see Revised Cost Estimates below), so the 4090's
+comparable vCPU count is fine. RAM constraint: keep replay buffer at 500K-1M
+positions (~7-15GB) rather than 2M (~30GB).
 
 ### Process Architecture (8 vCPUs)
 
 ```
-RunPod A100 80GB PCIe — 8 vCPUs, 117GB RAM
+RunPod RTX 4090 24GB — 8+ vCPUs, 32-64GB RAM
 
 Process 0: Orchestrator (Python)                         [1 vCPU]
   ├── GPU inference server (torch BF16, batched)
@@ -97,7 +108,7 @@ Communication:
 
 ---
 
-## Cost Estimates (8 vCPUs, 1x A100)
+## Original Cost Estimates (8 vCPUs, pre-benchmark)
 
 ### CPU Work Per Leaf (C++)
 
@@ -177,6 +188,124 @@ The 8 vCPUs are sufficient because C++ MCTS is fast and GPU is the bottleneck fo
 
 ---
 
+## Revised Cost Estimates (Based on Actual Benchmarks + RTX 4090)
+
+> Added after completing Steps 1-6 (C++ engine + MCTS). Benchmarks from Apple M1, -O3.
+> RunPod x86 CPUs (AMD EPYC / Intel Xeon) expected to be within ±20% of M1 single-core.
+> Hardware switched from A100 ($1.19/hr) to RTX 4090 ($0.44/hr) — same GPU speed, 2.7x cheaper.
+
+### What Changed: Per-Leaf Cost is 3-4x Higher Than Estimated
+
+The original estimates modeled per-leaf CPU cost as just engine operations
+(clone + place_stone + check). The actual MCTS sim cost includes significant
+overhead from tree traversal, game state management (deque indexing, full
+Game<N> copy with history), node allocation, and backup propagation.
+
+| | 9x9 Est. | 9x9 Actual | 19x19 Est. | 19x19 Actual |
+|---|---|---|---|---|
+| Per-leaf CPU cost | 1.0μs | **3.2μs** | 2.5μs | **10.8μs** |
+| Ratio | | **3.2x** | | **4.3x** |
+
+Source: MCTS benchmark, batch=8 virtual loss, DESIGN.md Step 6 results.
+
+The 19x19 cost is dominated by Game<19> state copy (~2.9KB Board + history arrays)
+and deque-based game state storage at expanded nodes.
+
+### Revised Per Tick (256 games × 8 VL = 2,048 leaves)
+
+| | 9x9 | 19x19 (5M) | 19x19 (47M) |
+|---|---|---|---|
+| CPU work (single thread) | 2,048 × 3.2μs = **6.6ms** | 2,048 × 10.8μs = **22.1ms** | 22.1ms |
+| CPU work (5 workers) | **1.3ms** | **4.4ms** | **4.4ms** |
+| GPU forward pass (BF16) | 0.5ms | 0.5ms | **3.0ms** |
+| Sync + overhead | ~0.2ms | ~0.2ms | ~0.2ms |
+| **Effective per tick** | **~2.0ms** | **~5.1ms** | **~7.6ms** |
+| vs original estimate | 0.7ms (2.9x) | 1.2ms (4.3x) | 3ms (2.5x) |
+
+**Critical finding**: CPU is the bottleneck for ALL configurations, including the
+47M model. The original plan assumed GPU would be the bottleneck for 47M (3ms GPU
+vs 1ms CPU). In reality, CPU per worker is 4.4ms > GPU 3ms.
+
+### Revised 9x9 Go: 400 sims/move
+
+| Component | Original | **Revised** |
+|-----------|----------|-------------|
+| Effective time per tick | 0.7ms | **2.0ms** |
+| Time per 256 games (3,000 ticks) | 2.1 sec | **6.0 sec** |
+| Realistic (2x overhead†) | ~6 sec | **~12 sec** |
+| **Throughput** | ~150K games/hr | **~77K games/hr** |
+| 25K games self-play | ~10 min | **~20 min** |
+| **Total per run** | ~35 min | **~45 min** |
+| **Cost per run ($0.44/hr)** | | **~$0.3** |
+| Budget for 10 runs | | **~$3** |
+
+†Using 2x overhead (not 3x) since C++ MCTS eliminates most Python-side overhead.
+
+**Verdict: 9x9 costs are trivial.**
+
+### Revised 19x19 Go: 800 sims/move, 5M model
+
+| Component | Original | **Revised** |
+|-----------|----------|-------------|
+| Effective time per tick | 1.2ms | **5.1ms** |
+| Time per 256 games (22,000 ticks) | 26 sec | **112 sec** |
+| Realistic (2x overhead) | ~80 sec | **~224 sec** |
+| **Throughput** | ~11.5K games/hr | **~4.1K games/hr** |
+| 80K games self-play | ~7 hours | **~20 hours** |
+| + training | ~3 hours | ~3 hours |
+| + resign savings (-25%) | ~-2 hours | **~-5 hours** |
+| **Total per run** | ~8 hours | **~18 hours** |
+| **Cost per run ($0.44/hr)** | | **~$8** |
+
+### Revised 19x19 Go: 800 sims/move, 47M model
+
+| Component | Original | **Revised** |
+|-----------|----------|-------------|
+| Bottleneck | GPU (3ms) | **CPU (4.4ms)** |
+| Effective time per tick | 3ms | **7.6ms** |
+| Time per 256 games | 66 sec | **167 sec** |
+| Realistic (2x overhead) | ~130 sec | **~334 sec** |
+| **Throughput** | ~7K games/hr | **~2.8K games/hr** |
+| 80K games + training | ~14 hours | **~32 hours** |
+| **Cost per run ($0.44/hr)** | | **~$14** |
+
+### Revised Total Budget (RTX 4090 at $0.44/hr)
+
+| Phase | Hours/run | Runs | Total Hours | **Cost** |
+|-------|-----------|------|-------------|----------|
+| 9x9 (5M, 400 sims) | 0.75h | 10 | 7.5h | **~$3** |
+| 19x19 (5M, 800 sims) | 18h | 3 | 54h | **~$24** |
+| 19x19 (47M, 800 sims) | 32h | 2 | 64h | **~$28** |
+| **Grand Total** | | **15** | **125.5h** | **~$55** |
+
+**$55 for all 15 runs — well under the $100 budget.** Switching from A100 to 4090
+saves 2.7x on hourly cost with identical GPU performance for our model sizes. This
+absorbs the 3-4x higher-than-expected CPU costs and still leaves ~$45 headroom for
+additional experimentation.
+
+For reference, the same 15 runs on A100 would cost ~$148.
+
+### Why the Original Per-Leaf Estimate Was Off
+
+1. **Per-leaf cost only counted engine ops** — tree traversal, deque indexing,
+   Game<N> copy with 8-position history, and node allocation were not accounted for
+2. **Game<19> is larger than Board<19>** — the Game struct stores history arrays
+   (8 × 361 = 2.9KB extra), making each clone ~6KB not ~3KB
+3. **deque<Game<N>> access pattern** — non-contiguous memory for game state storage
+   adds cache pressure vs the theoretical minimum
+
+### Optional: Further Optimizations (Bonus, Not Required for Budget)
+
+The CPU hot path can still be optimized during Step 7 (SelfPlayWorker):
+- **Lazy history copy**: only copy history when encoding observations, not on every clone
+- **Contiguous arena for game states**: replace `deque<Game<N>>` with a flat arena
+- **Increase VL batch from 8 to 16**: amortize per-tick sync overhead
+
+A 2x reduction in per-sim cost would bring the total to ~$30 — leaving room for
+even more experimental runs if needed.
+
+---
+
 ## Lessons from ChessRL Candidate 4 (6 Failed Versions)
 
 | Failure | Root Cause | Go Mitigation |
@@ -205,7 +334,7 @@ The 8 vCPUs are sufficient because C++ MCTS is fast and GPU is the bottleneck fo
 
 **Why**: Skips the random-play bootstrap. MCTS starts with competent search from day 1.
 
-### Phase 1: 9x9 Self-Play Training (1x A100, ~$2-3/run)
+### Phase 1: 9x9 Self-Play Training (1x RTX 4090, ~$0.3/run)
 
 **Config**:
 
@@ -229,7 +358,7 @@ The 8 vCPUs are sufficient because C++ MCTS is fast and GPU is the bottleneck fo
 
 **Targets**: >95% vs Random, >80% vs pure MCTS, >60% vs GnuGo lv5.
 
-### Phase 2: 19x19 Self-Play Training (1x A100, ~$14-21/run)
+### Phase 2: 19x19 Self-Play Training (1x RTX 4090, ~$8-14/run)
 
 Start from 19x19 pretrained weights. Same pipeline, scaled up:
 
@@ -371,7 +500,7 @@ def augment_8fold(obs, policy_map, value):
 
 ### 5. Replay Buffer
 
-- Circular buffer, 500K-2M positions
+- Circular buffer, 500K-1M positions (sized for 32-64GB RAM on RTX 4090 instances)
 - Uniformly sampled for training
 - Stored in shared memory (multiprocessing.SharedMemory) for zero-copy between self-play workers and trainer
 - Old positions naturally evicted as buffer wraps
@@ -489,14 +618,14 @@ AlphaZero/
 - Resign threshold, tree reuse
 - Local smoke test with tiny model on 9x9
 
-### Step 6: Cloud Training — 9x9 (~$12)
-- Rent 1x A100 80GB on RunPod ($1.19/hr)
+### Step 6: Cloud Training — 9x9 (~$3)
+- Rent 1x RTX 4090 24GB on RunPod ($0.44/hr)
 - Full training: 400 sims, 10 blocks/128ch, 25K games
 - Eval vs GnuGo
-- ~5 runs of experimentation
+- ~10 runs of experimentation
 
-### Step 7: Cloud Training — 19x19 (~$42-70)
-- Same A100, start from pretrained 19x19 weights
+### Step 7: Cloud Training — 19x19 (~$52)
+- Same RTX 4090, start from pretrained 19x19 weights
 - 800 sims, 80K games
 - Try both 5M and 47M model
 - Eval vs GnuGo levels 1-10

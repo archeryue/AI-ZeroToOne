@@ -542,7 +542,8 @@ Apple M1, `-O3`, all 19 correctness tests passing, 178x speedup vs Python.
 
 Note: games/sec targets assumed MCTS-style usage without `get_legal_moves` per move.
 The MCTS hot path (`place_stone` = 0.36μs) is well under the 2μs target.
-Per-leaf cost estimate: ~1.5μs (40% faster than the 2.5μs planned in PLAN.md).
+Engine-only per-leaf cost: ~1.5μs (clone + place_stone + check). However, the full
+MCTS sim cost measured in Step 6 is 3.2μs (9x9) / 10.8μs (19x19) — see below.
 
 ### Step 6 Results — C++ MCTS ✅
 
@@ -573,8 +574,10 @@ Implemented in `mcts.h` (header-only logic) + `mcts.cpp` (template instantiation
 | Time per sim (single) | **4.7μs** | **13.0μs** |
 | Time per sim (batch=8) | **3.2μs** | **10.8μs** |
 
-Per-leaf cost is well under the 2.5μs CPU budget from PLAN.md (the sim cost includes
-tree traversal + game state copy + expand + backup, not just place_stone).
+**Note**: Per-sim cost (10.8μs for 19x19) is ~4.3x the PLAN.md per-leaf estimate of
+2.5μs, which only counted engine ops (clone + place_stone). The full sim cost
+includes tree traversal, Game<N> state copy with history, deque access, node
+allocation, and backup. See PLAN.md "Revised Cost Estimates" for updated budget.
 
 #### Tests (12/12 passing)
 
