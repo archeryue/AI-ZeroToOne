@@ -74,7 +74,7 @@ export default function Home() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-orange-50">
         <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-md space-y-6">
-          <h1 className="text-3xl font-bold text-center">
+          <h1 className="text-3xl font-bold text-center" data-testid="setup-title">
             围棋 <span className="text-lg text-gray-500">Go</span>
           </h1>
 
@@ -85,6 +85,7 @@ export default function Home() {
               {[9, 13, 19].map((s) => (
                 <button
                   key={s}
+                  data-testid={`board-size-${s}`}
                   className={`flex-1 py-2 rounded-lg font-medium text-sm border-2 transition-colors ${
                     boardSize === s
                       ? "border-amber-500 bg-amber-50 text-amber-700"
@@ -105,6 +106,7 @@ export default function Home() {
               {(["black", "white"] as const).map((c) => (
                 <button
                   key={c}
+                  data-testid={`color-${c}`}
                   className={`flex-1 py-2 rounded-lg font-medium text-sm border-2 transition-colors flex items-center justify-center gap-2 ${
                     playerColor === c
                       ? "border-amber-500 bg-amber-50 text-amber-700"
@@ -135,6 +137,7 @@ export default function Home() {
               ].map(({ value, label, desc }) => (
                 <button
                   key={value}
+                  data-testid={`ai-type-${value}`}
                   className={`w-full text-left px-3 py-2 rounded-lg border-2 transition-colors ${
                     aiType === value
                       ? "border-amber-500 bg-amber-50"
@@ -173,6 +176,7 @@ export default function Home() {
 
           {/* Start button */}
           <button
+            data-testid="start-game"
             className="w-full py-3 bg-gray-900 text-white rounded-lg font-bold text-lg hover:bg-gray-800 transition-colors"
             onClick={handleNewGame}
           >
@@ -188,7 +192,7 @@ export default function Home() {
   const isGameOver = gameState.status !== "playing";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-50 p-4">
+    <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-50 p-4" data-testid="game-screen">
       <div className="max-w-5xl mx-auto flex flex-col lg:flex-row gap-6 items-start">
         {/* Board */}
         <div className="flex-shrink-0">

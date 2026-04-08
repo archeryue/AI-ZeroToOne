@@ -13,6 +13,7 @@ export interface GameState {
   territory?: number[][];
   player_color: "black" | "white";
   ai_type: string;
+  resigned_by?: "black" | "white";
 }
 
 export interface MoveRecord {
@@ -29,7 +30,7 @@ export interface CreateGameOptions {
 }
 
 export interface WSMessage {
-  type: "game_state" | "ai_thinking" | "ai_move" | "error";
-  data?: GameState | { row: number; col: number; is_pass?: boolean };
+  type: "game_state" | "ai_thinking" | "ai_move" | "ai_resign" | "error";
+  data?: GameState | { row: number; col: number; is_pass?: boolean } | { color: string };
   message?: string;
 }

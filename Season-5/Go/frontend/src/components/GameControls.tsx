@@ -17,6 +17,7 @@ export default function GameControls({
   return (
     <div className="flex flex-wrap gap-2">
       <button
+        data-testid="btn-pass"
         className={`${btnBase} bg-gray-800 text-white hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed`}
         onClick={onPass}
         disabled={disabled || gameOver}
@@ -24,6 +25,7 @@ export default function GameControls({
         Pass
       </button>
       <button
+        data-testid="btn-undo"
         className={`${btnBase} bg-gray-200 text-gray-800 hover:bg-gray-300 disabled:opacity-40 disabled:cursor-not-allowed`}
         onClick={onUndo}
         disabled={disabled || gameOver}
@@ -31,6 +33,7 @@ export default function GameControls({
         Undo
       </button>
       <button
+        data-testid="btn-resign"
         className={`${btnBase} bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-40 disabled:cursor-not-allowed`}
         onClick={onResign}
         disabled={disabled || gameOver}
@@ -38,6 +41,7 @@ export default function GameControls({
         Resign
       </button>
       <button
+        data-testid="btn-new-game"
         className={`${btnBase} bg-blue-600 text-white hover:bg-blue-500`}
         onClick={onNewGame}
       >

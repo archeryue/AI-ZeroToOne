@@ -36,6 +36,9 @@ export function useGameSocket(gameId: string | null) {
         case "ai_move":
           setAiThinking(false);
           break;
+        case "ai_resign":
+          setAiThinking(false);
+          break;
         case "error":
           setError(msg.message || "Unknown error");
           setAiThinking(false);

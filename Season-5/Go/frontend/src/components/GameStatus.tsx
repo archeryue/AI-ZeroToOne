@@ -9,18 +9,28 @@ interface GameStatusProps {
 }
 
 export default function GameStatus({ gameState, connected, aiThinking }: GameStatusProps) {
-  const { current_turn, status, captured, komi, score, ai_type, player_color, move_count } = gameState;
+  const { current_turn, status, captured, komi, score, ai_type, player_color, move_count, resigned_by } = gameState;
 
   const statusText = () => {
     if (status === "black_win") {
       if (score) {
         return `Black wins by ${(score.black - score.white).toFixed(1)} points`;
       }
+      if (resigned_by === "white") {
+        return resigned_by !== player_color
+          ? "AI resigned — You win!"
+          : "Black wins (resignation)";
+      }
       return "Black wins (resignation)";
     }
     if (status === "white_win") {
       if (score) {
         return `White wins by ${(score.white - score.black).toFixed(1)} points`;
+      }
+      if (resigned_by === "black") {
+        return resigned_by !== player_color
+          ? "AI resigned — You win!"
+          : "White wins (resignation)";
       }
       return "White wins (resignation)";
     }
@@ -41,7 +51,7 @@ export default function GameStatus({ gameState, connected, aiThinking }: GameSta
       </div>
 
       {/* Game status */}
-      <div className={`text-lg font-bold ${
+      <div data-testid="game-status" className={`text-lg font-bold ${
         status !== "playing" ? "text-amber-600" :
         aiThinking ? "text-blue-500 animate-pulse" : ""
       }`}>

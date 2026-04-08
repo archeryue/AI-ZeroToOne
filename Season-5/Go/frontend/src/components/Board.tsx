@@ -25,6 +25,7 @@ export default function Board({ gameState, onCellClick, disabled, lastMove }: Bo
 
   return (
     <svg
+      data-testid="game-board"
       width={boardPixel}
       height={boardPixel}
       viewBox={`0 0 ${boardPixel} ${boardPixel}`}
@@ -108,7 +109,7 @@ export default function Board({ gameState, onCellClick, disabled, lastMove }: Bo
           const isBlack = cell === 1;
           const isLastMove = lastMove && lastMove.row === r && lastMove.col === c;
           return (
-            <g key={`stone-${r}-${c}`}>
+            <g key={`stone-${r}-${c}`} data-testid={`stone-${r}-${c}`} data-color={isBlack ? "black" : "white"}>
               {/* Shadow */}
               <circle
                 cx={toX(c) + 1.5} cy={toY(r) + 1.5}
@@ -173,6 +174,7 @@ export default function Board({ gameState, onCellClick, disabled, lastMove }: Bo
           return (
             <circle
               key={`click-${r}-${c}`}
+              data-testid={`cell-${r}-${c}`}
               cx={toX(c)} cy={toY(r)}
               r={cellSize * 0.45}
               fill="transparent"
