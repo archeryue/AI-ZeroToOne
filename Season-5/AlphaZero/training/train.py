@@ -1,13 +1,17 @@
 """AlphaZero training entry point.
 
 Orchestrates the self-play → train → eval loop:
-  1. Self-play: generate games with current network + MCTS
+  1. Self-play: parallel games with C++ MCTS + batched GPU inference
   2. Train: sample from replay buffer, update network
   3. Eval: periodically evaluate vs baselines
   4. Repeat
 
 Usage:
-    python -m training.train --board-size 9 [--iterations 100] [--checkpoint PATH]
+    # Full training (GPU, 5 workers × ~52 games = 256 parallel)
+    python -m training.train --board-size 9 --iterations 100
+
+    # Smoke test (CPU, tiny model, 3 iterations)
+    python -m training.train --board-size 9 --smoke-test
 """
 
 import argparse
@@ -24,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from model.config import ModelConfig, TrainingConfig, CONFIGS
 from model.network import AlphaZeroNet
 from training.replay_buffer import ReplayBuffer
-from training.self_play import run_self_play
+from training.parallel_self_play import ParallelSelfPlay
 from training.trainer import Trainer
 
 
@@ -46,7 +50,6 @@ def evaluate_vs_random(net, device, model_cfg, train_cfg, num_games=100):
         tree = MCTSClass(game, train_cfg.c_puct,
                          train_cfg.dirichlet_alpha, train_cfg.dirichlet_epsilon)
 
-        # AlphaZero plays Black
         az_color = go_engine.BLACK
         seed = game_i * 1000
 
@@ -55,9 +58,8 @@ def evaluate_vs_random(net, device, model_cfg, train_cfg, num_games=100):
                 break
 
             if game.current_turn == az_color:
-                # AlphaZero move
                 tree.run_simulations(
-                    min(train_cfg.num_simulations, 100),  # fewer sims for eval speed
+                    min(train_cfg.num_simulations, 100),
                     train_cfg.virtual_loss_batch,
                     evaluator, add_noise=False, seed=seed + move_num)
                 action = tree.best_action()
@@ -67,7 +69,6 @@ def evaluate_vs_random(net, device, model_cfg, train_cfg, num_games=100):
                     game.make_move(action // N, action % N)
                 tree.advance(action)
             else:
-                # Random move
                 legal = game.get_legal_moves()
                 if legal and np.random.random() > 0.05:
                     r, c = legal[np.random.randint(len(legal))]
@@ -78,7 +79,6 @@ def evaluate_vs_random(net, device, model_cfg, train_cfg, num_games=100):
                     game.pass_move()
                 tree.advance(action)
 
-        # Force end
         while game.status == go_engine.PLAYING:
             game.pass_move()
 
@@ -95,6 +95,10 @@ def main():
                         help="Number of self-play → train iterations")
     parser.add_argument("--games-per-iter", type=int, default=None,
                         help="Override games per iteration")
+    parser.add_argument("--num-workers", type=int, default=5,
+                        help="Number of self-play worker threads")
+    parser.add_argument("--parallel-games", type=int, default=None,
+                        help="Override total parallel games (default: 256)")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Resume from checkpoint")
     parser.add_argument("--output-dir", type=str, default="checkpoints",
@@ -109,18 +113,21 @@ def main():
     model_cfg, train_cfg = CONFIGS[args.board_size]
 
     if args.smoke_test:
-        # Override for quick local testing
         model_cfg = ModelConfig(
             board_size=args.board_size, num_blocks=2, channels=32)
         train_cfg.num_simulations = 16
-        train_cfg.num_games_per_iter = 4
+        train_cfg.num_games_per_iter = 32
+        train_cfg.num_parallel_games = 8
         train_cfg.train_steps_per_iter = 5
         train_cfg.buffer_size = 10_000
         train_cfg.batch_size = 32
         args.iterations = 3
+        args.num_workers = 2
 
     if args.games_per_iter:
         train_cfg.num_games_per_iter = args.games_per_iter
+    if args.parallel_games:
+        train_cfg.num_parallel_games = args.parallel_games
 
     # Device
     if args.device:
@@ -132,9 +139,12 @@ def main():
     else:
         device = torch.device("cpu")
 
+    num_workers = args.num_workers
+
     print(f"AlphaZero Training — {args.board_size}x{args.board_size} Go")
     print(f"  Device: {device}")
     print(f"  Model: {model_cfg.num_blocks}b x {model_cfg.channels}ch")
+    print(f"  Workers: {num_workers}, parallel games: {train_cfg.num_parallel_games}")
     print(f"  Iterations: {args.iterations}")
     print(f"  Games/iter: {train_cfg.num_games_per_iter}")
     print(f"  Sims/move: {train_cfg.num_simulations}")
@@ -165,20 +175,20 @@ def main():
     for iteration in range(start_iter, args.iterations):
         iter_start = time.time()
 
-        # 1. Self-play
+        # 1. Parallel self-play (new workers each iteration to use updated net)
         sp_start = time.time()
-        sp_stats = run_self_play(
-            net, device, model_cfg, train_cfg, buffer,
-            num_games=train_cfg.num_games_per_iter,
-        )
+        sp = ParallelSelfPlay(net, device, model_cfg, train_cfg,
+                              num_workers=num_workers)
+        sp_stats = sp.run_games(train_cfg.num_games_per_iter, buffer)
         sp_time = time.time() - sp_start
 
+        avg_moves = sp_stats['positions'] / max(sp_stats['games'], 1)
         print(f"Iter {iteration:4d} | Self-play: {sp_stats['games']} games, "
-              f"{sp_stats['positions']} pos ({sp_stats['avg_moves']:.0f} avg moves), "
-              f"B/W={sp_stats['black_wins']}/{sp_stats['white_wins']}, "
+              f"{sp_stats['positions']} pos ({avg_moves:.0f} avg moves), "
+              f"{sp_stats['games_per_sec']:.1f} games/s, "
               f"buf={sp_stats['buffer_size']}, {sp_time:.1f}s")
 
-        # 2. Train (only if buffer has enough samples)
+        # 2. Train
         if len(buffer) >= train_cfg.batch_size:
             tr_start = time.time()
             tr_stats = trainer.train_epoch(buffer, args.iterations)
@@ -189,7 +199,8 @@ def main():
                   f"lr={tr_stats['lr']:.6f}, {tr_time:.1f}s")
         else:
             tr_stats = {}
-            print(f"         | Train: skipped (buffer {len(buffer)} < batch {train_cfg.batch_size})")
+            print(f"         | Train: skipped (buffer {len(buffer)} < "
+                  f"batch {train_cfg.batch_size})")
 
         # 3. Evaluate periodically
         eval_stats = {}
@@ -200,7 +211,8 @@ def main():
                                           num_games=num_eval)
             ev_time = time.time() - ev_start
             eval_stats = {"vs_random_winrate": win_rate}
-            print(f"         | Eval vs random: {win_rate:.1%} ({num_eval} games, {ev_time:.1f}s)")
+            print(f"         | Eval vs random: {win_rate:.1%} "
+                  f"({num_eval} games, {ev_time:.1f}s)")
 
         # 4. Checkpoint
         if (iteration + 1) % train_cfg.checkpoint_interval == 0:

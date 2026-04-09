@@ -1,10 +1,11 @@
-// pybind11 bindings for Go engine + MCTS.
+// pybind11 bindings for Go engine + MCTS + SelfPlayWorker.
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 #include "go.h"
 #include "mcts.h"
+#include "worker.h"
 
 namespace py = pybind11;
 
@@ -191,6 +192,68 @@ void bind_mcts(py::module_& m, const char* name) {
         ;
 }
 
+template<int N>
+void bind_worker(py::module_& m, const char* name) {
+    using W = alphazero::SelfPlayWorker<N>;
+    using Cfg = alphazero::SelfPlayConfig;
+
+    py::class_<W>(m, name)
+        .def(py::init<int, const Cfg&, int>(),
+             py::arg("num_games"), py::arg("config"), py::arg("seed") = 42)
+
+        // tick_select: GIL released for C++ parallelism
+        .def("tick_select", [](W& w, py::array_t<float> obs_out) {
+            float* ptr = obs_out.mutable_data();
+            py::gil_scoped_release release;
+            return w.tick_select(ptr);
+        }, py::arg("obs_out"))
+
+        // tick_process: GIL released for C++ parallelism
+        .def("tick_process", [](W& w, py::object policies_obj, py::object values_obj) {
+            const float* p = nullptr;
+            const float* v = nullptr;
+            py::array_t<float> p_arr, v_arr;  // prevent early dealloc
+            if (!policies_obj.is_none()) {
+                p_arr = policies_obj.cast<py::array_t<float>>();
+                v_arr = values_obj.cast<py::array_t<float>>();
+                p = p_arr.data();
+                v = v_arr.data();
+            }
+            py::gil_scoped_release release;
+            w.tick_process(p, v);
+        }, py::arg("policies") = py::none(), py::arg("values") = py::none())
+
+        .def("restart_completed", [](W& w) {
+            py::gil_scoped_release release;
+            w.restart_completed();
+        })
+
+        .def("harvest", [](W& w) {
+            auto r = w.harvest();
+            constexpr int OBS_SIZE = 17 * N * N;
+            constexpr int ACTIONS = N * N + 1;
+            int n = r.count;
+            if (n == 0) {
+                auto obs = py::array_t<float>(std::vector<ssize_t>{0, 17, N, N});
+                auto pol = py::array_t<float>(std::vector<ssize_t>{0, ACTIONS});
+                auto val = py::array_t<float>(std::vector<ssize_t>{0});
+                return py::make_tuple(obs, pol, val, (int)0);
+            }
+            auto obs = py::array_t<float>(std::vector<ssize_t>{n, 17, N, N});
+            std::memcpy(obs.mutable_data(), r.obs.data(), n * OBS_SIZE * sizeof(float));
+            auto pol = py::array_t<float>(std::vector<ssize_t>{n, ACTIONS});
+            std::memcpy(pol.mutable_data(), r.policy.data(), n * ACTIONS * sizeof(float));
+            auto val = py::array_t<float>(std::vector<ssize_t>{n});
+            std::memcpy(val.mutable_data(), r.value.data(), n * sizeof(float));
+            return py::make_tuple(obs, pol, val, (int)n);
+        })
+
+        .def_property_readonly("active_count", &W::active_count)
+        .def_property_readonly("games_done", &W::games_done)
+        .def_property_readonly("completed_count", &W::completed_count)
+        ;
+}
+
 PYBIND11_MODULE(go_engine, m) {
     m.doc() = "High-performance C++ Go engine for AlphaZero training";
 
@@ -213,4 +276,27 @@ PYBIND11_MODULE(go_engine, m) {
     bind_mcts<9>(m, "MCTSTree9");
     bind_mcts<13>(m, "MCTSTree13");
     bind_mcts<19>(m, "MCTSTree19");
+
+    // SelfPlayConfig
+    using Cfg = alphazero::SelfPlayConfig;
+    py::class_<Cfg>(m, "SelfPlayConfig")
+        .def(py::init<>())
+        .def_readwrite("komi", &Cfg::komi)
+        .def_readwrite("c_puct", &Cfg::c_puct)
+        .def_readwrite("dirichlet_alpha", &Cfg::dirichlet_alpha)
+        .def_readwrite("dirichlet_epsilon", &Cfg::dirichlet_epsilon)
+        .def_readwrite("vl_batch", &Cfg::vl_batch)
+        .def_readwrite("num_sims", &Cfg::num_sims)
+        .def_readwrite("temp_moves", &Cfg::temp_moves)
+        .def_readwrite("temp_high", &Cfg::temp_high)
+        .def_readwrite("temp_low", &Cfg::temp_low)
+        .def_readwrite("resign_threshold", &Cfg::resign_threshold)
+        .def_readwrite("resign_consecutive", &Cfg::resign_consecutive)
+        .def_readwrite("resign_disabled_frac", &Cfg::resign_disabled_frac)
+        .def_readwrite("max_game_moves", &Cfg::max_game_moves)
+        ;
+
+    bind_worker<9>(m, "SelfPlayWorker9");
+    bind_worker<13>(m, "SelfPlayWorker13");
+    bind_worker<19>(m, "SelfPlayWorker19");
 }

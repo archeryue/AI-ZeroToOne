@@ -13,7 +13,7 @@ else:
 ext_modules = [
     Pybind11Extension(
         "go_engine",
-        ["go.cpp", "mcts.cpp", "bindings.cpp"],
+        ["go.cpp", "mcts.cpp", "worker.cpp", "bindings.cpp"],
         extra_compile_args=compile_args,
         include_dirs=["."],
         language="c++",
