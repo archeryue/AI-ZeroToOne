@@ -60,6 +60,7 @@ class ParallelSelfPlay:
         self.model_cfg = model_cfg
         self.train_cfg = train_cfg
         self.num_workers = num_workers
+        self.use_cuda = device.type == "cuda"
 
         N = model_cfg.board_size
         total_games = train_cfg.num_parallel_games
@@ -79,6 +80,16 @@ class ParallelSelfPlay:
         self.obs_buffer = np.zeros((total_max_nn, 17, N, N), dtype=np.float32)
         self.policy_buffer = np.zeros((total_max_nn, N * N + 1), dtype=np.float32)
         self.value_buffer = np.zeros(total_max_nn, dtype=np.float32)
+
+        # Pinned memory for fast CPU→GPU transfer (DMA, non-blocking)
+        # Only allocate if CUDA is available — pinned memory is a CUDA feature.
+        if self.use_cuda:
+            self.obs_pinned = torch.empty(
+                (total_max_nn, 17, N, N), dtype=torch.float32, pin_memory=True)
+            self.policy_pinned = torch.empty(
+                (total_max_nn, N * N + 1), dtype=torch.float32, pin_memory=True)
+            self.value_pinned = torch.empty(
+                total_max_nn, dtype=torch.float32, pin_memory=True)
 
         # Per-worker offsets into shared buffers
         self.worker_offsets = []
@@ -187,18 +198,36 @@ class ParallelSelfPlay:
                             obs_parts.append(self.obs_buffer[off:off + nn])
 
                     obs_batch = np.concatenate(obs_parts, axis=0)
-                    obs_tensor = torch.from_numpy(obs_batch).to(self.device)
+
+                    if self.use_cuda:
+                        # Pinned memory path: copy into pinned buffer,
+                        # then async transfer to GPU via DMA (no staging copy)
+                        self.obs_pinned[:total_nn].copy_(
+                            torch.from_numpy(obs_batch))
+                        obs_tensor = self.obs_pinned[:total_nn].to(
+                            self.device, non_blocking=True)
+                    else:
+                        obs_tensor = torch.from_numpy(obs_batch)
 
                     with torch.no_grad():
-                        if self.device.type == "cuda":
+                        if self.use_cuda:
                             with torch.amp.autocast("cuda"):
                                 logits, values = self.net(obs_tensor)
                         else:
                             logits, values = self.net(obs_tensor)
                         policies = torch.softmax(logits, dim=-1)
 
-                    pol_np = policies.cpu().numpy()
-                    val_np = values.cpu().numpy()
+                    if self.use_cuda:
+                        # Copy results to pinned buffers, then to numpy
+                        self.policy_pinned[:total_nn].copy_(
+                            policies.cpu(), non_blocking=False)
+                        self.value_pinned[:total_nn].copy_(
+                            values.cpu(), non_blocking=False)
+                        pol_np = self.policy_pinned[:total_nn].numpy()
+                        val_np = self.value_pinned[:total_nn].numpy()
+                    else:
+                        pol_np = policies.numpy()
+                        val_np = values.numpy()
 
                     # Scatter results back to worker regions
                     nn_offset = 0
