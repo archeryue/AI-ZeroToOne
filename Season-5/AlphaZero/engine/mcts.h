@@ -467,10 +467,16 @@ public:
 
     float root_value() const {
         const MCTSNode& root = nodes[root_idx];
-        if (root.visit_count == 0) return 0.0f;
-        // Negate: root's value_sum is stored from the hypothetical parent's
-        // perspective (Convention 2), but callers expect the root player's perspective.
-        return -root.value_sum / static_cast<float>(root.visit_count);
+        if (!root.is_expanded() || root.num_children == 0) return 0.0f;
+        // Use the most-visited child's Q-value, which is already stored
+        // from the root's (parent's) perspective — no sign flip needed.
+        const MCTSNode* children = &nodes[root.children_start];
+        int best = 0;
+        for (int i = 1; i < root.num_children; ++i) {
+            if (children[i].visit_count > children[best].visit_count)
+                best = i;
+        }
+        return children[best].q_value();
     }
 
     std::vector<std::pair<int, float>> root_children_q() const {
