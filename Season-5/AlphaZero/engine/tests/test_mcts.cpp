@@ -106,12 +106,13 @@ void test_backup() {
     tree.backup(path, path_len, 0.5f);
 
     assert(tree.nodes[leaf].visit_count == 1);
-    assert(std::abs(tree.nodes[leaf].value_sum - 0.5f) < 1e-6f);
+    // Convention 2: leaf stores value from parent's perspective (negated)
+    assert(std::abs(tree.nodes[leaf].value_sum - (-0.5f)) < 1e-6f);
     assert(tree.nodes[leaf].virtual_loss == 0);
 
-    // Root: value flipped
+    // Root: value flipped again → from root's hypothetical parent's perspective
     assert(tree.nodes[tree.root_idx].visit_count == 1);
-    assert(std::abs(tree.nodes[tree.root_idx].value_sum - (-0.5f)) < 1e-6f);
+    assert(std::abs(tree.nodes[tree.root_idx].value_sum - 0.5f) < 1e-6f);
 
     printf("  PASS: backup propagation\n");
 }

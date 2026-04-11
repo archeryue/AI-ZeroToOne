@@ -286,7 +286,10 @@ public:
     // ─── Backup ─────────────────────────────────────────────────
 
     void backup(const int* path, int path_len, float value) {
-        float v = value;
+        // Negate: NN/terminal value is from the leaf's current player perspective,
+        // but node values are stored from the parent's perspective (Convention 2)
+        // so that ucb_score can use child.q_value() directly without negation.
+        float v = -value;
         for (int i = path_len - 1; i >= 0; --i) {
             MCTSNode& node = nodes[path[i]];
             node.value_sum += v;
@@ -465,7 +468,9 @@ public:
     float root_value() const {
         const MCTSNode& root = nodes[root_idx];
         if (root.visit_count == 0) return 0.0f;
-        return root.value_sum / static_cast<float>(root.visit_count);
+        // Negate: root's value_sum is stored from the hypothetical parent's
+        // perspective (Convention 2), but callers expect the root player's perspective.
+        return -root.value_sum / static_cast<float>(root.visit_count);
     }
 
     std::vector<std::pair<int, float>> root_children_q() const {
