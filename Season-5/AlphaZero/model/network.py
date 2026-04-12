@@ -65,14 +65,13 @@ class AlphaZeroNet(nn.Module):
 
         # Policy head
         p = F.relu(self.policy_bn(self.policy_conv(out)))
-        p = p.view(p.size(0), -1)
+        p = p.flatten(1)
         p = self.policy_fc(p)
-        # Return log-softmax for cross-entropy loss, raw logits for MCTS
         policy_logits = p
 
         # Value head
         v = F.relu(self.value_bn(self.value_conv(out)))
-        v = v.view(v.size(0), -1)
+        v = v.flatten(1)
         v = F.relu(self.value_fc1(v))
         v = torch.tanh(self.value_fc2(v))
         value = v.squeeze(-1)

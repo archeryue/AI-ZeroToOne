@@ -13,6 +13,7 @@ Per tick:
   5. Workers: process NN results → expand, backup, complete moves
 """
 
+import os
 import threading
 import time
 import numpy as np
@@ -62,6 +63,16 @@ class ParallelSelfPlay:
         self.num_workers = num_workers
         self.use_cuda = device.type == "cuda"
 
+        # Optional: torch.compile the inference net. Set AZ_COMPILE=0 to
+        # skip (useful for smoke tests where warmup dominates).
+        self.infer_net = net
+        if self.use_cuda and os.environ.get("AZ_COMPILE", "1") != "0":
+            try:
+                self.infer_net = torch.compile(net, mode="max-autotune")
+            except Exception as e:
+                print(f"[ParallelSelfPlay] torch.compile disabled: {e}")
+                self.infer_net = net
+
         N = model_cfg.board_size
         total_games = train_cfg.num_parallel_games
         games_per_worker = total_games // num_workers
@@ -75,14 +86,12 @@ class ParallelSelfPlay:
 
         max_nn_per_worker = [g * vl_batch for g in self.games_per_worker]
         total_max_nn = sum(max_nn_per_worker)
+        self.total_max_nn = total_max_nn
 
-        # Shared numpy buffers (same process, no copy needed)
-        self.obs_buffer = np.zeros((total_max_nn, 17, N, N), dtype=np.float32)
-        self.policy_buffer = np.zeros((total_max_nn, N * N + 1), dtype=np.float32)
-        self.value_buffer = np.zeros(total_max_nn, dtype=np.float32)
-
-        # Pinned memory for fast CPU→GPU transfer (DMA, non-blocking)
-        # Only allocate if CUDA is available — pinned memory is a CUDA feature.
+        # Shared buffers: when CUDA is available, back them with pinned
+        # tensors so workers write DIRECTLY into DMA-able memory. No
+        # intermediate numpy→pinned copy in the H2D path, and no extra
+        # pinned→numpy copy in the D2H path.
         if self.use_cuda:
             self.obs_pinned = torch.empty(
                 (total_max_nn, 17, N, N), dtype=torch.float32, pin_memory=True)
@@ -90,6 +99,16 @@ class ParallelSelfPlay:
                 (total_max_nn, N * N + 1), dtype=torch.float32, pin_memory=True)
             self.value_pinned = torch.empty(
                 total_max_nn, dtype=torch.float32, pin_memory=True)
+            # numpy views over pinned memory — zero-copy for workers
+            self.obs_buffer = self.obs_pinned.numpy()
+            self.policy_buffer = self.policy_pinned.numpy()
+            self.value_buffer = self.value_pinned.numpy()
+        else:
+            self.obs_buffer = np.zeros(
+                (total_max_nn, 17, N, N), dtype=np.float32)
+            self.policy_buffer = np.zeros(
+                (total_max_nn, N * N + 1), dtype=np.float32)
+            self.value_buffer = np.zeros(total_max_nn, dtype=np.float32)
 
         # Per-worker offsets into shared buffers
         self.worker_offsets = []
@@ -186,60 +205,39 @@ class ParallelSelfPlay:
 
                 total_games = sum(w.games_done for w in self.workers)
 
-                # GPU inference on batched observations
+                # GPU inference on the full fixed-size batch. Workers have
+                # already written their leaves directly into self.obs_pinned
+                # (via the numpy view self.obs_buffer), so there's no
+                # intermediate copy. Gap slots between worker regions carry
+                # stale data; their outputs are harmless because each worker
+                # only reads its own offset range from policy/value.
                 total_nn = sum(self.nn_counts)
                 if total_nn > 0:
-                    # Gather observations from worker regions
-                    obs_parts = []
-                    for i in range(self.num_workers):
-                        nn = self.nn_counts[i]
-                        if nn > 0:
-                            off = self.worker_offsets[i]
-                            obs_parts.append(self.obs_buffer[off:off + nn])
-
-                    obs_batch = np.concatenate(obs_parts, axis=0)
-
                     if self.use_cuda:
-                        # Pinned memory path: copy into pinned buffer,
-                        # then async transfer to GPU via DMA (no staging copy)
-                        self.obs_pinned[:total_nn].copy_(
-                            torch.from_numpy(obs_batch))
-                        obs_tensor = self.obs_pinned[:total_nn].to(
+                        obs_tensor = self.obs_pinned.to(
                             self.device, non_blocking=True)
                     else:
-                        obs_tensor = torch.from_numpy(obs_batch)
+                        obs_tensor = torch.from_numpy(self.obs_buffer)
 
                     with torch.no_grad():
                         if self.use_cuda:
                             with torch.amp.autocast("cuda"):
-                                logits, values = self.net(obs_tensor)
+                                logits, values = self.infer_net(obs_tensor)
                         else:
-                            logits, values = self.net(obs_tensor)
+                            logits, values = self.infer_net(obs_tensor)
                         policies = torch.softmax(logits, dim=-1)
 
                     if self.use_cuda:
-                        # Copy results to pinned buffers, then to numpy
-                        self.policy_pinned[:total_nn].copy_(
-                            policies.cpu(), non_blocking=False)
-                        self.value_pinned[:total_nn].copy_(
-                            values.cpu(), non_blocking=False)
-                        pol_np = self.policy_pinned[:total_nn].numpy()
-                        val_np = self.value_pinned[:total_nn].numpy()
+                        # D2H straight into pinned (which the workers will
+                        # read via self.{policy,value}_buffer numpy views).
+                        self.policy_pinned.copy_(
+                            policies, non_blocking=True)
+                        self.value_pinned.copy_(
+                            values, non_blocking=True)
+                        torch.cuda.synchronize()
                     else:
-                        pol_np = policies.numpy()
-                        val_np = values.numpy()
-
-                    # Scatter results back to worker regions
-                    nn_offset = 0
-                    for i in range(self.num_workers):
-                        nn = self.nn_counts[i]
-                        if nn > 0:
-                            off = self.worker_offsets[i]
-                            self.policy_buffer[off:off + nn] = \
-                                pol_np[nn_offset:nn_offset + nn]
-                            self.value_buffer[off:off + nn] = \
-                                val_np[nn_offset:nn_offset + nn]
-                            nn_offset += nn
+                        np.copyto(self.policy_buffer, policies.numpy())
+                        np.copyto(self.value_buffer, values.numpy())
 
                 # Signal workers to process results
                 self.process_barrier.wait()

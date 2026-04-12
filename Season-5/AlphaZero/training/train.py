@@ -20,8 +20,25 @@ import sys
 import time
 import json
 
+# Limit CPU thread pools BEFORE importing torch/numpy. The orchestrator's
+# CPU work is tiny (host↔device copies, augmentation) — torch's default
+# 128-thread intra-op pool causes severe contention with the C++ self-play
+# workers and slows self-play by ~7x. See worker contention diagnosis.
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+           "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
 import torch
 import numpy as np
+
+torch.set_num_threads(1)
+try:
+    torch.set_num_interop_threads(1)
+except RuntimeError:
+    # Another module already set interop threads; ignore silently.
+    pass
+# Let fp32 matmuls use TF32 on Ampere/Ada — no quality cost for this model.
+torch.set_float32_matmul_precision("high")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
