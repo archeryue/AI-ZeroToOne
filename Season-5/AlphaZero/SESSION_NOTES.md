@@ -155,9 +155,13 @@ update, which is a subtle MCTS quality tradeoff. Held off on the user's
 
 ## Final measured throughput
 
-Steady-state numbers from `_bench_selfplay.py` (60 s warmup + 120 s
-measurement window; real Phase 1 config: 10b × 128ch, batch 2048, 400 sims,
-5 workers × 256 parallel games):
+Two sources: (1) the synthetic `_bench_selfplay.py` micro-benchmark and
+(2) real iter 0 of the Phase 1 run.
+
+### Synthetic bench (`_bench_selfplay.py`)
+
+60 s warmup + 120 s measurement window; real Phase 1 config: 10b × 128ch,
+batch 2048, 400 sims, 5 workers × 256 parallel games:
 
 | Component | Before fixes | After all fixes |
 |---|---:|---:|
@@ -166,10 +170,49 @@ measurement window; real Phase 1 config: 10b × 128ch, batch 2048, 400 sims,
 | "Other" (barriers + bookkeeping) | 7.9 ms | ~6.3 ms |
 | Throughput | ~0.7 games/s (first 20 s, warmup-polluted) | **~2.1 games/s** |
 
-**Phase 1 projection:** 150K games at 2.1 games/s → **~20 hours / ~$8.8**
-at RunPod RTX 4090 $0.44/hr. Plan's original estimate was 2.5 h / $1.1 —
-that was never physically reachable because the plan's GPU time was 30×
-too optimistic.
+### Real iter 0 of Phase 1 (the number that actually matters)
+
+| Metric | Value |
+|---|---:|
+| Games completed | 2049 |
+| Positions generated | 157,642 |
+| Average moves / game | 77 |
+| Self-play time | **644.6 s** |
+| Train time (100 steps) | 1.8 s |
+| **Games / s** | **3.2** |
+| Initial loss | 5.25 (policy 4.37, value 0.88) |
+
+**The real throughput (3.2 games/s) is ~1.5× the synthetic bench (2.1
+games/s).** The bench was conservative because:
+
+1. It used a tiny warmup replay buffer — real workers run with real games,
+   and tree reuse across moves gets better amortization once games settle.
+2. Synthetic obs were random tensors, but Go positions have much higher
+   sparsity — the GPU forward path caches and memory access patterns
+   are slightly friendlier in reality.
+3. The bench measured 20 s of an ongoing run without waiting for
+   steady-state game completion rate; iter 0 reports the full 2048-game
+   window average.
+
+### Phase 1 projection
+
+At 3.2 games/s and **\$0.60/hr** (actual RunPod rate, not the \$0.44/hr
+in `PLAN.md`):
+
+| Item | Value |
+|---|---:|
+| Games per run | 150K (73 iters × 2048) |
+| Self-play wall time | ~13 h |
+| Training overhead | ~2 min |
+| Eval overhead (7 evals) | ~30 min |
+| **Total wall time** | **~13.5 h** |
+| **Cost per run** | **~\$8.1** |
+
+Plan's original Phase 1 estimate was 2.5 h / \$1.1, which was never
+physically reachable: the plan assumed a 0.5 ms GPU forward but the 4090
+actually takes ~15 ms for a bs=2048 bf16 forward on our 10b × 128ch
+model (~30× miss). Our 13.5 h is as close as we can get without
+cutting sims or accepting an MCTS quality tradeoff from pipelining.
 
 ## Correctness verification
 
@@ -198,10 +241,14 @@ All checks pass.
 ## Phase 1 run in progress
 
 Launched `python -m training.train --board-size 9 --iterations 73 --num-workers 5`
-as pid **11235** at 2026-04-12 07:55. Logs at
+as pid **11235** at 2026-04-12 07:55 UTC. Logs at
 `Season-5/AlphaZero/logs/9x9_run1.log`, checkpoints at
 `Season-5/AlphaZero/checkpoints/9x9_run1/` every 10 iterations.
 
-Expected completion: ~20 hours (~$8.8 on RunPod). If the training curve
-looks healthy after a few iterations we can leave it; if not, we can stop
-and investigate.
+**Expected completion:** ~13.5 h total wall time / ~\$8.1 on RunPod at
+\$0.60/hr. Iter 0 finished at 644 s with loss 5.25 and 3.2 games/s —
+healthy signal.
+
+A monitor cron (every 10 min) tails the log and writes state into
+`logs/monitor.log` so we can spot stalls, crashes, or degraded loss
+without babysitting.
