@@ -50,9 +50,12 @@ struct MCTSNode {
 };
 
 // ─── Fixed-size path buffer ─────────────────────────────────────
-// 64 is ample — MCTS tree depth is ~10-30 with typical sim counts.
+// MCTS tree depth is usually ~10-30, but with tree reuse across many
+// moves the effective depth can grow unboundedly. 256 is a safe bound
+// for any realistic Go position; select_leaf also hard-caps against
+// this limit to prevent out-of-bounds writes.
 
-static constexpr int MAX_PATH_DEPTH = 64;
+static constexpr int MAX_PATH_DEPTH = 256;
 
 struct LeafInfo {
     int path[MAX_PATH_DEPTH];
@@ -153,6 +156,7 @@ public:
         out_path[len++] = current;
 
         while (nodes[current].is_expanded() && !nodes[current].is_terminal) {
+            if (len >= MAX_PATH_DEPTH) break;  // hard cap — prevents OOB
             int child = select_child(current);
             if (child < 0) break;
 
