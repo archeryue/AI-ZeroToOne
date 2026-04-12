@@ -15,10 +15,26 @@ Usage:
 """
 
 import argparse
+import faulthandler
 import os
+import signal
 import sys
 import time
+import traceback
 import json
+
+# Dump all Python thread stacks on any fatal signal (SIGSEGV, SIGFPE,
+# SIGABRT, SIGBUS, SIGILL) and on SIGUSR1 on demand. Also dump every
+# 5 minutes to stderr so we capture deadlocks even if no signal fires.
+faulthandler.enable()
+try:
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
+except Exception:
+    pass
+try:
+    faulthandler.dump_traceback_later(300, repeat=True)
+except Exception:
+    pass
 
 # Limit CPU thread pools BEFORE importing torch/numpy. The orchestrator's
 # CPU work is tiny (host↔device copies, augmentation) — torch's default
@@ -187,15 +203,22 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     log_path = os.path.join(args.output_dir, "training_log.jsonl")
 
+    # Create ParallelSelfPlay ONCE outside the training loop. Constructing
+    # a fresh instance every iter was leaking dangling C++ worker pointers
+    # into pinned-memory-backed numpy views and crashing with SIGSEGV
+    # around iter 3. Reuse also saves per-iter torch.compile overhead.
+    sp = ParallelSelfPlay(net, device, model_cfg, train_cfg,
+                          num_workers=num_workers)
+
     print("\n--- Training Loop ---\n")
 
     for iteration in range(start_iter, args.iterations):
         iter_start = time.time()
 
-        # 1. Parallel self-play (new workers each iteration to use updated net)
+        # 1. Parallel self-play — reuses the same sp instance each iter.
+        # Workers pick up updated net weights automatically because self.net
+        # is a reference to the same module we train.
         sp_start = time.time()
-        sp = ParallelSelfPlay(net, device, model_cfg, train_cfg,
-                              num_workers=num_workers)
         sp_stats = sp.run_games(train_cfg.num_games_per_iter, buffer)
         sp_time = time.time() - sp_start
 
@@ -231,12 +254,24 @@ def main():
             print(f"         | Eval vs random: {win_rate:.1%} "
                   f"({num_eval} games, {ev_time:.1f}s)")
 
-        # 4. Checkpoint
+        # 4. Checkpoint (+ retention: keep KEEP_LAST most recent)
         if (iteration + 1) % train_cfg.checkpoint_interval == 0:
             ckpt_path = os.path.join(args.output_dir,
                                      f"checkpoint_{iteration:04d}.pt")
             trainer.save_checkpoint(ckpt_path, iteration, extra=eval_stats)
             print(f"         | Checkpoint saved: {ckpt_path}")
+
+            KEEP_LAST = 5
+            import glob
+            existing = sorted(glob.glob(os.path.join(
+                args.output_dir, "checkpoint_*.pt")))
+            for old in existing[:-KEEP_LAST]:
+                try:
+                    os.remove(old)
+                    print(f"         | Pruned old checkpoint: "
+                          f"{os.path.basename(old)}")
+                except OSError:
+                    pass
 
         # Log
         iter_time = time.time() - iter_start
@@ -260,4 +295,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as e:
+        # Ensure any Python-level crash (exception, KeyboardInterrupt,
+        # SystemExit with traceback) is fully captured before exit —
+        # previous crashes left no trace in the training log.
+        print("\n!!! TRAINING CRASHED !!!", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise

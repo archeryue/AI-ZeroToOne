@@ -71,6 +71,7 @@ CONFIGS = {
             buffer_size=500_000,
             max_game_moves=150,
             temperature_moves=15,
+            checkpoint_interval=1,
         ),
     ),
     13: (

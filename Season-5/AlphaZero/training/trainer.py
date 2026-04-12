@@ -31,6 +31,7 @@ class Trainer:
         )
 
         self.total_steps = 0
+        self._nan_skips = 0  # running count of skipped-non-finite steps
 
     def get_lr(self, total_iterations: int) -> float:
         """Cosine decay from lr_init to lr_final."""
@@ -42,7 +43,13 @@ class Trainer:
         return self.cfg.lr_final + (self.cfg.lr_init - self.cfg.lr_final) * cosine
 
     def train_step(self, buffer: ReplayBuffer) -> dict:
-        """One gradient step. Returns loss components."""
+        """One gradient step. Returns loss components.
+
+        Skipped (no weight update) if the loss is non-finite — we hit a
+        NaN at iter 13 of the first run because a single gradient spike
+        with no clipping sent the weights to inf. The guard here plus
+        `clip_grad_norm_` below prevents a recurrence.
+        """
         self.net.train()
 
         obs_np, policy_np, value_np = buffer.sample(self.cfg.batch_size)
@@ -62,8 +69,24 @@ class Trainer:
 
             loss = policy_loss + value_loss
 
+        # NaN / Inf guard — skip the step entirely rather than poisoning
+        # the weights. Returns the current (unchanged) values so the
+        # epoch average still accumulates something sensible.
+        if not torch.isfinite(loss):
+            self._nan_skips += 1
+            return {
+                "loss": float("nan"),
+                "policy_loss": float("nan"),
+                "value_loss": float("nan"),
+                "skipped": True,
+            }
+
         self.optimizer.zero_grad()
         loss.backward()
+        # Gradient clipping — cap the L2 norm of all parameter grads
+        # at 5.0. Without this, occasional SGD spikes can send weights
+        # to ∞ in one step (learned the hard way at iter 13).
+        torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=5.0)
         self.optimizer.step()
 
         self.total_steps += 1
@@ -72,6 +95,7 @@ class Trainer:
             "loss": loss.item(),
             "policy_loss": policy_loss.item(),
             "value_loss": value_loss.item(),
+            "skipped": False,
         }
 
     def train_epoch(self, buffer: ReplayBuffer, total_iterations: int) -> dict:
@@ -84,19 +108,28 @@ class Trainer:
         total_policy = 0.0
         total_value = 0.0
         steps = self.cfg.train_steps_per_iter
+        applied = 0
+        skipped_this_epoch = 0
 
         for _ in range(steps):
             stats = self.train_step(buffer)
+            if stats.get("skipped"):
+                skipped_this_epoch += 1
+                continue
             total_loss += stats["loss"]
             total_policy += stats["policy_loss"]
             total_value += stats["value_loss"]
+            applied += 1
 
+        denom = max(applied, 1)
         return {
-            "loss": total_loss / steps,
-            "policy_loss": total_policy / steps,
-            "value_loss": total_value / steps,
+            "loss": total_loss / denom,
+            "policy_loss": total_policy / denom,
+            "value_loss": total_value / denom,
             "lr": lr,
             "total_steps": self.total_steps,
+            "skipped": skipped_this_epoch,
+            "skipped_total": self._nan_skips,
         }
 
     def save_checkpoint(self, path: str, iteration: int, extra: dict = None):
