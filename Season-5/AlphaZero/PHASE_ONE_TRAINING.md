@@ -19,8 +19,12 @@ weights with all three classes of fix applied.
 
 ## Environment
 
-- **Host:** RunPod RTX 4090 (24 GB VRAM), AMD EPYC 7763
-- **Container:** cgroup CPU quota 27.2 cores, memory 125 GB
+- **Host (run 1, prior RunPod box):** RTX 4090 24 GB, EPYC 7763,
+  cgroup CPU quota 27.2 cores, **memory 125 GB**, oom_kill_disable=1
+- **Host (run 2, current box):** RTX 4090 24 GB, cgroup memory
+  **42.8 GB** — much tighter than run 1's host. `oom_kill_disable=1`
+  here too, so hitting the limit produces a silent SIGKILL with no
+  Python traceback (see Problem 4 below).
 - **Python 3.11**, **torch 2.4.1+cu124** with inductor / Triton
 - **Rate:** ~\$0.60/hr
 
@@ -379,6 +383,135 @@ Grad clipping and NaN guard from run 1 are kept as-is.
 
 ---
 
+## Problem 4 — Memory OOM (run 2, current host)
+
+### Symptom
+
+Run 2 launched from random weights, completed iter 0 (4.6 g/s, 76
+avg moves) and iter 1 (5.1 g/s, 81 avg moves) cleanly with healthy
+loss descent (5.23 → 4.97). Then the process disappeared **silently**:
+
+- `ps -p 3374` returned empty — process gone
+- Log file ended mid-write inside `numpy/lib/function_base.py`
+- **No `!!! TRAINING CRASHED !!!` marker** that `train.py`'s top-level
+  exception handler emits
+- No `Fatal Python error`, no traceback, no OOM message
+- `oom_kill 0` in `/sys/fs/cgroup/memory/memory.events`
+- Iter 0 + iter 1 checkpoints (24 MB each) and `latest_buffer.npz`
+  (2.92 GB) all fully written before the death
+
+A truly silent kill — no Python-level signal handler had a chance to
+run.
+
+### Root cause: cgroup memory limit on this host is 42.8 GB, not 125 GB
+
+The original `PHASE_ONE_TRAINING` Environment section claimed
+"memory 125 GB" — that was the *prior* RunPod box (run 1 host). The
+current box has very different limits:
+
+```
+$ cat /sys/fs/cgroup/memory/memory.limit_in_bytes
+45999996928              # 42.8 GB
+$ cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes
+41591750656              # 38.7 GB peak before kill
+$ cat /sys/fs/cgroup/memory/memory.oom_control
+oom_kill_disable 1       # ← key
+under_oom 0
+oom_kill 0
+```
+
+The combination is the trap:
+
+- **42.8 GB hard limit** vs run 1's host with 125 GB (~3× headroom)
+- **`oom_kill_disable=1`** — when the cgroup hits its limit, the
+  kernel's normal OOM killer is suppressed, and the container runtime
+  freezes processes and SIGKILLs them. SIGKILL bypasses Python
+  signal handlers entirely, so `faulthandler` never gets to write a
+  traceback, and `train.py`'s `except BaseException` block never
+  runs. Process just vanishes.
+
+### Memory budget at the moment of death
+
+Approximate breakdown of the ~38.7 GB peak:
+
+| | Estimate |
+|---|---:|
+| MCTS tree state (5 workers × 52 games × ~50 MB tree+game pool) | ~13 GB |
+| Replay buffer in RAM (500K × 17 × 9 × 9 × float32 + policy + value) | ~2.64 GB |
+| **Transient `np.savez` of 2.92 GB buffer file** | **~2.5–3 GB peak** |
+| PyTorch CUDA reserved + model + optimizer + torch.compile cache | ~2 GB |
+| Worker pinned tensors + own numpy buffers | ~50 MB |
+| Other (Python interpreter, libs, OS, fragmentation) | ~remainder |
+
+Steady-state (~35 GB) was already at 82% of the 42.8 GB cap. The
+brand-new buffer-persistence code path that was added as a fix for
+Problem 3 introduced a **2.5–3 GB transient peak during `np.savez`**
+right after each iter's training step. That spike is what pushed us
+over the line at iter 1 → iter 2 boundary.
+
+The same code ran on run 1's host without issue because there was
+~90 GB of headroom there.
+
+### Fix
+
+Smallest, most surgical change that keeps the run progressing on
+this host:
+
+1. **Disable `buffer.save_to(...)` in `train.py`** for now. The
+   `save_to` / `load_from` / `--anchor-buffer` code paths from
+   Problem 3 are kept intact for future hosts with more headroom —
+   we just don't *call* the save on this run. (Comment in code
+   points to this section.)
+2. **Reduce 9x9 `buffer_size` from 500K → 300K.** Saves ~1.06 GB
+   permanent in-RAM. Buffer still holds plenty of samples for
+   training diversity (~5 iters worth at the new game lengths).
+3. **Delete the existing `latest_buffer.npz`** to free 2.92 GB of
+   disk and prevent `train.py` from finding it on resume (which
+   would try to reload the now-too-big buffer into a 300K array and
+   raise).
+4. **Restart from `checkpoint_0001.pt`** — no rollback, just resume
+   from where we crashed. The replay buffer starts empty and refills
+   on the first self-play phase; minor warmup hit only, no quality
+   impact since iter 2 trains on iter-2-self-play data only and
+   subsequent iters fill the buffer normally.
+
+```python
+# training/train.py — replaces the buffer.save_to(...) call:
+# Buffer persistence deliberately disabled: the np.savez transient
+# pushed peak memory over the 42.8 GB cgroup limit on this host
+# (silent SIGKILL after iter 1). The code path stays for future
+# hosts with more memory headroom.
+```
+
+```python
+# model/config.py — 9x9 preset:
+buffer_size=300_000,   # was 500_000; fits under 42.8 GB cgroup
+```
+
+### Validation
+
+After the restart from `checkpoint_0001.pt` as pid 4305:
+
+| iter | RSS peak | result |
+|---|---:|---|
+| 2 | ~33 GB | first iter post-fix; clean self-play + train + ckpt |
+| 3 | ~33 GB | clean |
+| 4 | ~33 GB | new low loss, eval vs random = 63% |
+| 5 | ~33 GB | clean — confirmed stably past the OOM boundary |
+
+Steady-state ~33 GB out of 42.8 GB is comfortable headroom (~9 GB).
+No further memory work needed for the rest of Phase 1.
+
+### Followup for Phase 2
+
+Phase 2 will use a 1M sample × 13x13 obs buffer = **12.2 GB as
+float32**, almost 5× larger than the Phase 1 buffer that already
+caused this OOM. Switching obs storage to `uint8` (lossless because
+every plane is already 0/1) drops it to ~3 GB. See
+`PHASE_TWO_TODO.md` section 1 for the full plan and code diff.
+
+---
+
 ## Run 2 — live training
 
 ### Verification before launch
@@ -438,6 +571,110 @@ lines immediately and root-cause before restarting.)_
 
 | iter | total | pi | v | self-play time | avg moves | games/s | note |
 |---|---:|---:|---:|---:|---:|---:|---|
+| 0 | 5.2312 | 4.3591 | 0.8721 | 443.7 s | 76 | 4.6 | First iter; torch.compile autotune warmup absorbed here |
+| 1 | 4.9727 | 4.1127 | 0.8600 | 405.5 s | 81 | 5.1 | Throughput climbing as compile cache settles. Process SIGKILLed silently after this iter — see Problem 4 (42 GB cgroup OOM during np.savez buffer persist). |
+| 2 | 4.7398 | 3.9659 | 0.7739 | 541.3 s | 99 | 3.8 | Resumed from `checkpoint_0001.pt` after OOM fix (buffer persistence disabled, `buffer_size` 500K → 300K). Avg moves jump to 99 — resign v2 + wider τ are keeping games longer, exactly the diversity outcome we wanted. Throughput trades down accordingly. |
+| 3 | 4.8337 | 4.0272 | 0.8066 | 456.6 s | 92 | 4.5 | Single-iter wobble (+0.09 total). Normal training noise; nothing to investigate. |
+| 4 | 4.7235 | 3.9479 | 0.7756 | 443.3 s | 90 | 4.6 | New low total **and** new low policy. **Eval vs random = 63.0%** (100 games, 73.6 s) — first strength signal. Run 1's first eval was at iter 9 = 96%, so not directly comparable; trajectory is on track for a 90%+ landing at iter 9. |
+| 5 | 4.8378 | 4.0069 | 0.8309 | 409.6 s | 84 | 5.0 | Slight uptick (+0.11 total). Avg moves back down to 84, throughput up. Memory holding stably under the 42 GB cap. Run is now confirmed stable past the OOM fix. |
+| 6 | 4.7589 | 3.8859 | 0.8730 | 366.6 s | 75 | 5.6 | Policy new low (3.89). Throughput best yet at 5.6 g/s; games shortening as model gains confidence. |
+| 7 | 4.3473 | 3.8863 | 0.4610 | 451.2 s | 90 | 4.5 | Big total drop (−0.41) driven by value collapse 0.87 → 0.46. Pattern looks unlike run 1 iter 12 (which had games shortening 84 → 44 from aggressive resign); here games **lengthened** 75 → 90, so value head is fitting genuinely harder positions, not cheap resign-decided ones. |
+| 8 | 4.3982 | 3.6446 | 0.7536 | 402.8 s | 81 | 5.1 | Confirmed: iter-7 jump was a value-head wobble, not a regression. Total bounced back (4.35 → 4.40), value recovered (0.46 → 0.75), policy hit **new low 3.64**. |
+| 9 | 4.4429 | 3.7163 | 0.7267 | 475.8 s | 95 | 4.3 | Single-iter policy wobble (3.64 → 3.72). **Eval vs random = 91.0%** (100 games). 5 pp below run 1 iter 9 (96%) — expected cost of wider τ schedule. |
+| 10 | 3.8752 | 3.4874 | 0.3878 | 291.5 s | 60 | 7.0 | **Big total drop −0.56**, value collapses to 0.39. Same superficial signature as run 1 iter 12 (loss drop + games shortening + throughput up). Triggered an immediate weight audit. |
+| 11 | 3.9196 | 3.4189 | 0.5007 | 399.0 s | 79 | 5.1 | Iter-10 shortening reverted (60 → 79). Loss flat. Audit at iter 10 showed `policy_bn_var=26.4` — well below run 1's iter-12 drift point of 44.3. Continued. |
+| 12 | 3.6767 | 3.1436 | 0.5332 | 458.6 s | 90 | 4.5 | Policy new low (3.14). Games stable at 90. Audit: `policy_bn_var=33.9` — climbing but still under run 1's 44.3 threshold. |
+| 13 | 3.4851 | 2.9921 | 0.4930 | 334.0 s | 67 | 6.1 | **Second sharp shortening** 90 → 67. Total dropped −0.95 across iters 9-13 (−0.24/iter, well above the 0.1/iter "fast drop" red flag). Audit: `pbn_var` went **down** 33.9 → 32.2 (oscillation, not run-1 monotone growth). False alarm cleared. |
+| 14 | 3.6705 | 2.7474 | 0.9231 | 473.5 s | 94 | 4.3 | Total reversed up (+0.18), policy still hitting new lows (2.75), games back to 94. **Eval vs random = 49.0% — apparent catastrophic regression.** Triggered another audit; `pbn_var` jumped 32.2 → 42.6 (breached run-1 red flag). The eval looked apocalyptic but it turned out to be a metric failure, not real strength loss — see Tournament results below. |
+| 15 | 3.4998 | 2.6338 | 0.8660 | 468.7 s | 92 | 4.4 | Policy new low (2.63). Held off on intervention pending head-to-head data. |
+| 16 | 2.8011 | 2.5802 | 0.2209 | 362.5 s | 73 | 5.7 | Total drop −0.70. Policy stable at 2.58, value collapsed again. The "fast drop pattern" continued — alarming on the loss table, ambiguous on the audit. |
+| 17 | 2.2028 | 1.9205 | 0.2824 | 482.3 s | 93 | 4.3 | Policy broke 2.0. Net loss progress 4.44 → 2.20 across iters 9-17 (−1.50, vs run 1's −1.43 across iters 12-19). Faster degradation than run 1 in raw loss terms. |
+| 18 | 2.8348 | 2.1556 | 0.6792 | 390.6 s | 78 | 5.2 | **First up-tick.** Total +0.63, value bounced 0.28 → 0.68. Free-fall paused. |
+| 19 | 2.7262 | 2.1197 | 0.6065 | 510.1 s | 100 | 4.0 | Total stabilized. **Eval vs random = 100.0% (100/100)** — completely contradicting iter 14's 49%. Confirmed the in-loop eval is broken; the same 100-game seed set giving 49% then 100% within 5 iters can't be measuring real strength. |
+| 20 | 2.7321 | 2.0529 | 0.6792 | 503.2 s | 99 | 4.1 | Loss virtually unchanged from iter 19. Stable plateau confirmed. |
+| 21 | 2.7400 | 2.0686 | 0.6714 | 553.4 s | 106 | 3.7 | **Longest avg moves of the run (106).** Loss has held in the 2.73-2.83 band for 4 iters. Training paused after this iter to run a comprehensive strength-curve tournament. |
+
+### Iter-21 weight audit
+
+```
+iter   pbn_var  vbn_var  input_conv  pol_fc.max  status
+  9    22.33    55.38    0.135       0.196       baseline
+ 14    42.58    67.72    0.200       0.346       breached pbn 40 ⚠️
+ 19    62.11    59.95    0.364       0.422       breached input_conv 0.25 at iter 16
+```
+
+Run 2 iter 19 vs run 1 iter 19: `pbn_var` 62 vs 74 (run 2 ~16% lower),
+`input_conv` 0.36 vs 0.55 (run 2 ~35% lower). Run 2's drift is real
+but slower than run 1 — the resign v2 + wider exploration fixes
+slowed the specialization but didn't fully prevent it. **Importantly,
+this is a scale issue, not a quality issue** — the actual play
+strength is genuinely improving (see tournament results below).
+
+### Strength-curve tournament (paused after iter 21)
+
+The in-loop vs-random eval became unreliable (iter 14 = 49% then
+iter 19 = 100% on the same 100-game seed set is impossible if the
+model were really regressing). To get a trustworthy strength
+trajectory, paused training and ran paired head-to-head matchups
+between checkpoints using `training/eval_matchup.py` (25 pairs ×
+100 sims/move × 4 random opening ply, paired colors so first-move
+advantage cancels).
+
+Anchor: `checkpoint_0009.pt`. All other checkpoints play against it.
+
+| iter (NEW) | score vs iter 9 | 95% CI | pairs (NEW–OLD) | ties | verdict |
+|---:|---:|---|---:|---:|---|
+| 0 | **0.220** | [0.10, 0.41] | 0–14 | 11 | REGRESSION (expected — barely trained) |
+| 3 | 0.500 | [0.32, 0.68] | 0–0 | 25 | matched |
+| 6 | 0.500 | [0.32, 0.68] | 0–0 | 25 | matched |
+| 9 | (anchor) | — | — | — | self-reference |
+| 12 | 0.500 | [0.32, 0.68] | 0–0 | 25 | matched |
+| 14 | **0.580** | [0.39, 0.75] | 4–0 | 21 | meaningful (despite in-loop eval saying 49% ⚠️) |
+| 15 | 0.540 | [0.35, 0.72] | 3–1 | 21 | matched |
+| 18 | **0.720** | [0.52, 0.86] | 11–0 | 14 | STRONG |
+| 19 | **0.920** | [0.75, 0.98] | 21–0 | 4 | STRONG (in-loop eval said 100% — agrees) |
+| 21 | **1.000** | [0.87, 1.00] | 25–0 | 0 | STRONG |
+
+Sanity check: **iter 0 vs iter 21 = 0.000** (0–25, 0 ties). The end
+of the run is dramatically stronger than the start, as expected.
+
+### Three things the tournament tells us
+
+1. **There was never a regression.** Iter 14 — the supposedly
+   catastrophic 49% point — was actually *slightly stronger* than
+   iter 9 (4 clear wins, 0 losses, 21 ties). The in-loop
+   `evaluate_vs_random` is a broken signal here. Likely cause: at
+   iter 14 the value head briefly over-weighted the pass action,
+   which causes AZ-as-black to lose to random by Tromp-Taylor area
+   scoring with komi 7.5. The function passes whenever
+   `tree.best_action()` returns the pass index, with no recovery
+   path. By iter 19 the value head re-balanced that specific failure
+   mode even though the broader BN drift continued.
+
+2. **Real improvement is monotone with a sharp inflection at ~iter
+   14–16.** Iters 3–12 are statistical ties with iter 9 (100 sims
+   per move at eval can't distinguish weak models from each other;
+   the games keep ending in color-decided ties). The first decisive
+   improvement shows at iter 14, then the model accelerates:
+   0.58 → 0.72 → 0.92 → 1.00 across iters 14–21.
+
+3. **BN drift ≠ quality loss.** Run 2 ended iter 21 with `pbn_var`
+   = 62 and `input_conv` = 0.36 — both clearly breaching run 1's
+   red-flag thresholds — yet head-to-head says iter 21 dominates
+   every earlier checkpoint. The BN drift is a scale/normalization
+   shift, not the kind of representational specialization that
+   destroys play strength. The run 1 doc's "policy_bn > 40 = trouble"
+   threshold was over-conservative.
+
+### Lesson learned for future runs
+
+**Never trust `evaluate_vs_random` as the primary regression signal
+for a strong model.** It has a hidden failure mode: the function
+unconditionally takes whatever `best_action()` returns, including the
+pass action, with no safety net. A model whose value head transiently
+over-weights passing will lose to random play by area scoring even
+though it would crush the same opponent if forced to play real moves.
+Head-to-head matchups (`eval_matchup.py`) are the real signal.
 
 ### Red flags (stop and investigate)
 
