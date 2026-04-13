@@ -292,7 +292,10 @@ PYBIND11_MODULE(go_engine, m) {
         .def_readwrite("temp_low", &Cfg::temp_low)
         .def_readwrite("resign_threshold", &Cfg::resign_threshold)
         .def_readwrite("resign_consecutive", &Cfg::resign_consecutive)
+        .def_readwrite("resign_min_move", &Cfg::resign_min_move)
         .def_readwrite("resign_disabled_frac", &Cfg::resign_disabled_frac)
+        .def_readwrite("resign_min_child_visits_frac",
+                       &Cfg::resign_min_child_visits_frac)
         .def_readwrite("max_game_moves", &Cfg::max_game_moves)
         ;
 

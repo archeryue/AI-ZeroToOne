@@ -36,10 +36,12 @@ class TrainingConfig:
     num_games_per_iter: int = 2048
     max_game_moves: int = 200  # max moves before forcing end
 
-    # Resign
-    resign_threshold: float = -0.95
-    resign_consecutive: int = 3
-    resign_disabled_frac: float = 0.1  # 10% of games never resign
+    # Resign (v2 — see engine/worker.h SelfPlayConfig comment)
+    resign_threshold: float = -0.90
+    resign_consecutive: int = 5
+    resign_min_move: int = 20
+    resign_disabled_frac: float = 0.20  # 20% of games never resign
+    resign_min_child_visits_frac: float = 0.05
 
     # Replay buffer
     buffer_size: int = 500_000
@@ -70,8 +72,14 @@ CONFIGS = {
             num_games_per_iter=2048,
             buffer_size=500_000,
             max_game_moves=150,
-            temperature_moves=15,
+            # Exploration phase covers ~half the avg game (~85 moves) so
+            # mid-game positions stay diverse in the replay buffer.
+            # temp_low=0.25 preserves runner-up move signal in training
+            # targets instead of collapsing to one-hot argmax.
+            temperature_moves=30,
+            temperature_low=0.25,
             checkpoint_interval=1,
+            eval_interval=5,  # tighter than default so we catch drift early
         ),
     ),
     13: (

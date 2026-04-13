@@ -1,5 +1,6 @@
 """Circular replay buffer with 8-fold symmetry augmentation for Go."""
 
+import os
 import numpy as np
 
 
@@ -69,6 +70,45 @@ class ReplayBuffer:
         """Sample a random batch. Returns (obs, policy, value) numpy arrays."""
         indices = np.random.randint(0, self.size, size=batch_size)
         return self.obs[indices], self.policy[indices], self.value[indices]
+
+    def save_to(self, path: str) -> None:
+        """Persist current live samples to a .npz file.
+
+        Only the `size` live samples are written so reloads into a
+        different-capacity buffer still work. Written atomically via a
+        temp file + rename so a crash mid-save never leaves a partial
+        file that `load_from` would silently accept.
+        """
+        # np.savez always appends .npz if the stem has none — pick a temp
+        # path that already ends in .npz so the written file is exactly
+        # `tmp_path`, then atomically rename to `path`.
+        tmp_path = path + ".tmp.npz"
+        with open(tmp_path, "wb") as f:
+            np.savez(
+                f,
+                obs=self.obs[:self.size],
+                policy=self.policy[:self.size],
+                value=self.value[:self.size],
+                index=np.int64(self.index),
+                size=np.int64(self.size),
+            )
+        os.replace(tmp_path, path)
+
+    def load_from(self, path: str) -> None:
+        """Restore samples from a file produced by `save_to`.
+
+        Truncates the saved payload to this buffer's capacity if the
+        saved buffer was larger. `index` is advanced to `size` so new
+        pushes continue to wrap circularly.
+        """
+        data = np.load(path)
+        n = int(data["size"])
+        n = min(n, self.capacity)
+        self.obs[:n] = data["obs"][:n]
+        self.policy[:n] = data["policy"][:n]
+        self.value[:n] = data["value"][:n]
+        self.size = n
+        self.index = n
 
     def __len__(self) -> int:
         return self.size

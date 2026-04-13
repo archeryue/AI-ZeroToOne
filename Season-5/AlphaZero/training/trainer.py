@@ -42,17 +42,35 @@ class Trainer:
         cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
         return self.cfg.lr_final + (self.cfg.lr_init - self.cfg.lr_final) * cosine
 
-    def train_step(self, buffer: ReplayBuffer) -> dict:
+    def train_step(self, buffer: ReplayBuffer,
+                   anchor: ReplayBuffer = None,
+                   anchor_frac: float = 0.0) -> dict:
         """One gradient step. Returns loss components.
 
         Skipped (no weight update) if the loss is non-finite — we hit a
         NaN at iter 13 of the first run because a single gradient spike
         with no clipping sent the weights to inf. The guard here plus
         `clip_grad_norm_` below prevents a recurrence.
+
+        If `anchor` is given, `anchor_frac` of each batch is drawn from
+        it instead of the main buffer. This is a regularizer against
+        BatchNorm specializing to the current narrow self-play
+        distribution (see iter 4→19 regression handover).
         """
         self.net.train()
 
-        obs_np, policy_np, value_np = buffer.sample(self.cfg.batch_size)
+        use_anchor = (
+            anchor is not None and anchor_frac > 0.0 and len(anchor) > 0)
+        if use_anchor:
+            n_anchor = int(self.cfg.batch_size * anchor_frac)
+            n_main = self.cfg.batch_size - n_anchor
+            obs_m, pol_m, val_m = buffer.sample(n_main)
+            obs_a, pol_a, val_a = anchor.sample(n_anchor)
+            obs_np = np.concatenate([obs_m, obs_a], axis=0)
+            policy_np = np.concatenate([pol_m, pol_a], axis=0)
+            value_np = np.concatenate([val_m, val_a], axis=0)
+        else:
+            obs_np, policy_np, value_np = buffer.sample(self.cfg.batch_size)
         obs = torch.from_numpy(obs_np).to(self.device)
         target_policy = torch.from_numpy(policy_np).to(self.device)
         target_value = torch.from_numpy(value_np).to(self.device)
@@ -98,7 +116,9 @@ class Trainer:
             "skipped": False,
         }
 
-    def train_epoch(self, buffer: ReplayBuffer, total_iterations: int) -> dict:
+    def train_epoch(self, buffer: ReplayBuffer, total_iterations: int,
+                    anchor: ReplayBuffer = None,
+                    anchor_frac: float = 0.0) -> dict:
         """Run train_steps_per_iter gradient steps. Returns average losses."""
         lr = self.get_lr(total_iterations)
         for pg in self.optimizer.param_groups:
@@ -112,7 +132,8 @@ class Trainer:
         skipped_this_epoch = 0
 
         for _ in range(steps):
-            stats = self.train_step(buffer)
+            stats = self.train_step(
+                buffer, anchor=anchor, anchor_frac=anchor_frac)
             if stats.get("skipped"):
                 skipped_this_epoch += 1
                 continue

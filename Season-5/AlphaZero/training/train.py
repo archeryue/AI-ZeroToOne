@@ -140,6 +140,12 @@ def main():
                         help="Device (cuda/cpu/mps)")
     parser.add_argument("--smoke-test", action="store_true",
                         help="Quick test with minimal settings")
+    parser.add_argument("--anchor-buffer", type=str, default=None,
+                        help="Path to .npz anchor buffer mixed into every "
+                             "batch (prevents BN distribution drift)")
+    parser.add_argument("--anchor-frac", type=float, default=0.2,
+                        help="Fraction of each train batch drawn from the "
+                             "anchor buffer")
     args = parser.parse_args()
 
     # Select config
@@ -203,6 +209,27 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     log_path = os.path.join(args.output_dir, "training_log.jsonl")
 
+    # Persistent replay buffer — the iter-4→19 regression was partly
+    # driven by losing the entire buffer on every restart, forcing the
+    # model to refill it from its own current (narrow) distribution.
+    buffer_path = os.path.join(args.output_dir, "latest_buffer.npz")
+    if args.checkpoint and os.path.exists(buffer_path):
+        buffer.load_from(buffer_path)
+        print(f"  Restored replay buffer: {len(buffer)} samples from "
+              f"{buffer_path}")
+
+    # Optional anchor buffer — mixed into every training batch to
+    # prevent BN specialization to the current self-play distribution.
+    anchor = None
+    if args.anchor_buffer:
+        if not os.path.exists(args.anchor_buffer):
+            raise FileNotFoundError(
+                f"Anchor buffer not found: {args.anchor_buffer}")
+        anchor = ReplayBuffer(train_cfg.buffer_size, model_cfg.board_size)
+        anchor.load_from(args.anchor_buffer)
+        print(f"  Loaded anchor buffer: {len(anchor)} samples from "
+              f"{args.anchor_buffer}")
+
     # Create ParallelSelfPlay ONCE outside the training loop. Constructing
     # a fresh instance every iter was leaking dangling C++ worker pointers
     # into pinned-memory-backed numpy views and crashing with SIGSEGV
@@ -231,7 +258,9 @@ def main():
         # 2. Train
         if len(buffer) >= train_cfg.batch_size:
             tr_start = time.time()
-            tr_stats = trainer.train_epoch(buffer, args.iterations)
+            tr_stats = trainer.train_epoch(
+                buffer, args.iterations,
+                anchor=anchor, anchor_frac=args.anchor_frac)
             tr_time = time.time() - tr_start
 
             print(f"         | Train: loss={tr_stats['loss']:.4f} "
@@ -241,6 +270,12 @@ def main():
             tr_stats = {}
             print(f"         | Train: skipped (buffer {len(buffer)} < "
                   f"batch {train_cfg.batch_size})")
+
+        # Persist buffer so a restart doesn't reset it to empty.
+        try:
+            buffer.save_to(buffer_path)
+        except OSError as e:
+            print(f"         | Buffer save failed: {e}")
 
         # 3. Evaluate periodically
         eval_stats = {}
@@ -254,24 +289,15 @@ def main():
             print(f"         | Eval vs random: {win_rate:.1%} "
                   f"({num_eval} games, {ev_time:.1f}s)")
 
-        # 4. Checkpoint (+ retention: keep KEEP_LAST most recent)
+        # 4. Checkpoint — keep ALL of them. Each 9x9 ckpt is ~36 MB,
+        # 73 iters × 36 MB = ~2.6 GB total, which is negligible. Prior
+        # run lost iter 14 to a `KEEP_LAST=5` retention sweep and we
+        # couldn't reconstruct the weight-drift trajectory post-hoc.
         if (iteration + 1) % train_cfg.checkpoint_interval == 0:
             ckpt_path = os.path.join(args.output_dir,
                                      f"checkpoint_{iteration:04d}.pt")
             trainer.save_checkpoint(ckpt_path, iteration, extra=eval_stats)
             print(f"         | Checkpoint saved: {ckpt_path}")
-
-            KEEP_LAST = 5
-            import glob
-            existing = sorted(glob.glob(os.path.join(
-                args.output_dir, "checkpoint_*.pt")))
-            for old in existing[:-KEEP_LAST]:
-                try:
-                    os.remove(old)
-                    print(f"         | Pruned old checkpoint: "
-                          f"{os.path.basename(old)}")
-                except OSError:
-                    pass
 
         # Log
         iter_time = time.time() - iter_start

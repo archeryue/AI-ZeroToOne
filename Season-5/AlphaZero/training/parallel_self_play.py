@@ -45,7 +45,9 @@ def _make_sp_config(train_cfg: TrainingConfig) -> go_engine.SelfPlayConfig:
     cfg.temp_low = train_cfg.temperature_low
     cfg.resign_threshold = train_cfg.resign_threshold
     cfg.resign_consecutive = train_cfg.resign_consecutive
+    cfg.resign_min_move = train_cfg.resign_min_move
     cfg.resign_disabled_frac = train_cfg.resign_disabled_frac
+    cfg.resign_min_child_visits_frac = train_cfg.resign_min_child_visits_frac
     cfg.max_game_moves = train_cfg.max_game_moves
     return cfg
 

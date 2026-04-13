@@ -34,9 +34,14 @@ struct SelfPlayConfig {
     int temp_moves = 15;
     float temp_high = 1.0f;
     float temp_low = 0.1f;
-    float resign_threshold = -0.95f;
-    int resign_consecutive = 3;
-    float resign_disabled_frac = 0.1f;
+    // Resign v2 — loosened threshold + move floor + credible-child
+    // cross-check. Iter 12→19 regression traced back to aggressive
+    // resign cutting middle/endgame positions out of the replay buffer.
+    float resign_threshold = -0.90f;
+    int resign_consecutive = 5;
+    int resign_min_move = 20;
+    float resign_disabled_frac = 0.20f;
+    float resign_min_child_visits_frac = 0.05f;
     int max_game_moves = 200;
 };
 
@@ -134,10 +139,32 @@ private:
         rec.turn = s.game.current_turn;
         s.records.push_back(rec);
 
-        // Resign check
-        if (!s.disable_resign) {
+        // Resign check (v2 — see SelfPlayConfig comment).
+        // Gated by a hard move-count floor to keep early-game losing
+        // positions in the buffer, and cross-checked against per-child
+        // Q-values so a credibly-visited "recovery line" blocks resign.
+        if (!s.disable_resign && s.move_num >= cfg_.resign_min_move) {
             float root_v = s.tree->root_value();
-            if (root_v < cfg_.resign_threshold)
+            bool losing = (root_v < cfg_.resign_threshold);
+
+            if (losing) {
+                const auto& root = s.tree->nodes[s.tree->root_idx];
+                int total_visits = root.visit_count;
+                int min_visits = std::max(
+                    1,
+                    static_cast<int>(total_visits * cfg_.resign_min_child_visits_frac));
+                for (int i = 0; i < root.num_children; ++i) {
+                    const auto& child =
+                        s.tree->nodes[root.children_start + i];
+                    if (child.visit_count >= min_visits
+                        && child.q_value() > cfg_.resign_threshold) {
+                        losing = false;  // credible recovery line exists
+                        break;
+                    }
+                }
+            }
+
+            if (losing)
                 s.consecutive_low++;
             else
                 s.consecutive_low = 0;
