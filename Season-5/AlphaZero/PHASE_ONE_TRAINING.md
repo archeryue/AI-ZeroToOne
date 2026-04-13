@@ -987,3 +987,37 @@ Head-to-head matchups (`eval_matchup.py`) are the real signal.
 - `policy_bn.max` in 30–40 range
 - `input_conv.max` in 0.15–0.25 range
 - Training loss drops gently with oscillation
+
+---
+
+## Phase 1 complete — 2026-04-13
+
+Stopped at iter 39 (40 iters total in run 2). The round-robin Elo
+ranking and 6 generational matchups all confirm strict monotone
+improvement with no regression at any step. The buffer redesign
+(Problem 5) was the highest-value single intervention; the LR cut
+locked in stable convergence on top of it.
+
+### Final deliverables
+
+| file | iter | Elo | role |
+|---|---:|---:|---|
+| `checkpoints/9x9_run2/checkpoint_0039.pt` | 39 | 2298 | **Phase 1 final model** — strongest, dominates every other checkpoint in the round-robin |
+| `checkpoints/9x9_run2/checkpoint_0009.pt` | 9 | 1500 | **Historical anchor** — the reference point used in every tournament throughout this doc; kept so future cross-phase strength comparisons stay valid |
+| `checkpoints/9x9_run2/training_log.jsonl` | — | — | Per-iter self-play / train / eval JSONL across the full 40-iter run |
+
+The other 38 intermediate checkpoints (~890 MB) were removed once
+the round-robin Elo confirmed the monotone trajectory and no further
+analysis required reaching back to specific intermediate weights.
+
+### Phase 1 summary
+
+- **5 distinct problems** hit and rooted in sequence: Speed → Crash
+  → Regression → Memory OOM → Buffer narrow-window
+- **40 iters** trained from random weights → Elo 2298 (948 points
+  above untrained baseline)
+- **Cost:** ~1 RunPod day on a 4090 24 GB / 42.83 GiB cgroup host
+- **Clean monotone improvement** at every measured iter
+- **All fixes documented in code + this file**; `PHASE_TWO_TODO.md`
+  captures the deferred work for 13x13 (uint8 buffer, 13x13
+  hyperparameter checklist, persistence re-evaluation)
