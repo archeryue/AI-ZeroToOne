@@ -853,6 +853,85 @@ improves on the previous** — no regression at any step in the entire
 40-iter run, including the supposedly-flat plateau iters 30–39 which
 the loss curve made look like stagnation.
 
+### Round-robin tournament (final picture)
+
+To get a single global ranking instead of a chain of pairwise
+matchups, ran a **double round-robin** over 6 candidate checkpoints
+that span the run's interesting points: iter 0 (untrained baseline),
+iter 9 (first stable strength), iter 21 (pre-buffer-redesign peak),
+iter 30 (post-redesign first stable), iter 34 (mid-plateau), iter 39
+(final).
+
+**Format:** 6 candidates × 5 opponents each = 30 directed pairs, but
+paired play is color-symmetric so we run each unordered pair once →
+**15 matches**. 20 pairs × 100 sims × 4 random opening ply per match.
+Match order is shuffled deterministically (seed 20260413) so no pair
+gets a positional advantage. Total wall time: ~11 minutes on free GPU.
+
+**Cross-table** (row = NEW player, cell = NEW's score against the
+column's OLD; symmetric: cell(B,A) = 1 - cell(A,B)):
+
+```
+iter       0       9      21      30      34      39    avg
+-----------------------------------------------------------
+   0       -   0.250   0.000   0.025   0.050   0.025   0.070
+   9   0.750       -   0.000   0.025   0.025   0.025   0.165
+  21   1.000   1.000       -   0.250   0.050   0.075   0.475
+  30   0.975   0.975   0.750       -   0.400   0.275   0.675
+  34   0.950   0.975   0.950   0.600       -   0.450   0.785
+  39   0.975   0.975   0.925   0.725   0.550       -   0.830
+```
+
+**Bradley-Terry Elo** (iterative MM, iter 9 anchored at 1500). An
+Elo gap of 100 ≈ 64% expected score; gap of 200 ≈ 76%.
+
+| rank | iter | avg score | Elo | Δ from iter 9 |
+|---:|---:|---:|---:|---:|
+| 1 | **39** | 0.830 | **2298** | +798 |
+| 2 | 34 | 0.785 | 2252 | +752 |
+| 3 | 30 | 0.675 | 2144 | +644 |
+| 4 | 21 | 0.475 | 1937 | +437 |
+| 5 | 9 | 0.165 | 1500 | 0 |
+| 6 | 0 | 0.070 | 1350 | −150 |
+
+**Strict monotone ordering — no reversals anywhere in the matrix.**
+Every later iter beats every earlier iter on average. The run is a
+clean monotone improvement across all 40 iters.
+
+**Elo gaps tell the story of the run's distinct phases:**
+
+```
+iter  0 →  9:  +150  bootstrap (untrained → stable strength)
+iter  9 → 21:  +437  ←  largest gap: run-2 fixes (resign v2, wider τ)
+iter 21 → 30:  +207  ←  buffer redesign + LR cut
+iter 30 → 34:  +108  early plateau, real strength gains
+iter 34 → 39:   +46  late plateau, slow refinement
+─────────────────
+total span:    948 Elo points across 40 iters
+```
+
+**Two findings the round-robin surfaced that the chain matchups
+didn't:**
+
+1. **iter 0 vs iter 9 = 0.250.** The untrained baseline isn't pure
+   noise — random NN priors + MCTS search alone takes ~25% of pairs
+   against iter 9. MCTS does meaningful work even with garbage
+   policy/value heads, which is a useful sanity number for any future
+   from-scratch run that wants to know "how much does the network
+   add over pure search."
+
+2. **iter 30 vs iter 34 = 0.400** is the closest match in the entire
+   tournament. The plateau region is genuinely tight — iter 34 wins
+   more than iter 30 but iter 30 still takes ~40% of pairs. This
+   confirms the "fine-grained tactical refinement" reading of the
+   plateau iters — real progress, but small enough that any single
+   pair can go either way.
+
+**Methodology validation:** every score in the round-robin is within
+±0.04 of the corresponding pairwise score from the earlier
+generational matchups (which used 25 pairs instead of 20). The
+matchup methodology is reliable.
+
 ### Three things the tournament tells us
 
 1. **There was never a regression.** Iter 14 — the supposedly
