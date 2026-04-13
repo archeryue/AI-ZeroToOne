@@ -216,8 +216,7 @@ class ParallelSelfPlay:
                     obs_np, pol_np, val_np, count = worker.harvest()
                     if count > 0:
                         for j in range(count):
-                            buffer.push(obs_np[j], pol_np[j], val_np[j],
-                                        augment=True)
+                            buffer.push(obs_np[j], pol_np[j], val_np[j])
                         total_positions += count
 
                 total_games = (sum(w.games_done for w in self.workers)
@@ -300,7 +299,7 @@ class ParallelSelfPlay:
             obs_np, pol_np, val_np, count = worker.harvest()
             if count > 0:
                 for j in range(count):
-                    buffer.push(obs_np[j], pol_np[j], val_np[j], augment=True)
+                    buffer.push(obs_np[j], pol_np[j], val_np[j])
                 total_positions += count
 
         total_games = (sum(w.games_done for w in self.workers)

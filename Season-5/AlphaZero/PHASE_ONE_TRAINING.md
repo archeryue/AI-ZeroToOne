@@ -512,6 +512,171 @@ every plane is already 0/1) drops it to ~3 GB. See
 
 ---
 
+## Problem 5 — Replay buffer was a 1/4-iter window (run 2, iter 22)
+
+### Symptom
+
+Run 2 iters 22-30+ had been running cleanly with healthy oscillation,
+but the BN-drift weight audit through iter 21 still showed slow
+specialization (`policy_bn_var` 22 → 62, `input_conv` 0.13 → 0.36
+across iters 9 → 21). Resign v2 + wider τ slowed the drift but didn't
+prevent it. Why?
+
+### Root cause: 8-fold augmentation at push time
+
+```python
+# old replay_buffer.py — push() ran augment_8fold() inline
+def push(self, obs, policy, value, augment=True):
+    if augment:
+        for obs_t, pol_t in augment_8fold(obs, policy, self.board_size):
+            self._store(obs_t, pol_t, value)
+```
+
+The math nobody had done:
+
+| | numbers |
+|---|---:|
+| Buffer capacity | 300K samples (after Problem 4 cut) |
+| Raw positions per iter | ~165K |
+| Augmentation at push | **8×** |
+| Store calls per iter | **1.32 M** |
+| Buffer wraps per iter | **4.4×** |
+| Effective history | last ~37,500 of the most recent iter (~0.23 iter) |
+
+The "replay buffer" wasn't replaying anything. Every gradient step was
+fitted to the last 1/4 iter of the model's own most recent self-play —
+zero diversity from earlier iters, zero protection against
+distribution narrowing. **This is why BN drift kept appearing despite
+all the run-1 fixes**: the surface-level symptoms (resign behavior,
+temperature schedule) were treated, but the data-distribution funnel
+underneath was left intact.
+
+### Fix: augment-on-sample (vectorized)
+
+Three coupled changes:
+
+1. **`push()` stores ONE raw position per call.** The augmentation
+   loop is removed from push entirely.
+
+2. **`sample()` applies a random symmetry per sampled position**,
+   chosen uniformly from the 8 dihedral group elements. The batch
+   is bucketed by symmetry id and each rotation runs once on a
+   contiguous sub-batch via `np.rot90(bucket, k, axes=(2,3))` — no
+   per-sample Python loop, fully vectorized.
+
+3. **`buffer_size` raised back to 500K** (had been 300K under the
+   assumption that the OOM was buffer-driven; with augment-on-sample
+   the buffer holds the same RAM as the old 500K-augmented config
+   but represents 8× more distinct positions).
+
+```python
+# new replay_buffer.py — push stores 1 raw, sample applies symmetry
+def push(self, obs, policy, value):
+    idx = self.index % self.capacity
+    self.obs[idx] = obs           # one raw, no augmentation
+    self.policy[idx] = policy
+    self.value[idx] = value
+    self.index += 1
+    self.size = min(self.size + 1, self.capacity)
+
+def sample(self, batch_size):
+    indices = np.random.randint(0, self.size, size=batch_size)
+    sym_choices = np.random.randint(0, 8, size=batch_size)
+    raw_obs = self.obs[indices]
+    raw_pol = self.policy[indices]
+    out_obs = np.empty_like(raw_obs)
+    out_pol = np.empty_like(raw_pol)
+    for sym_id, (k, flip) in enumerate(SYMMETRIES):
+        mask = sym_choices == sym_id
+        if mask.any():
+            obs_t, pol_t = _apply_symmetry_batch(
+                raw_obs[mask], raw_pol[mask], k, flip, self.board_size)
+            out_obs[mask] = obs_t
+            out_pol[mask] = pol_t
+    return out_obs, out_pol, self.value[indices].copy()
+```
+
+### Numbers after the fix
+
+| | before (push-time aug) | after (sample-time aug) |
+|---|---:|---:|
+| Buffer capacity (samples) | 300K | 500K |
+| Distinct positions held | ~37.5K (300K / 8) | **500K** |
+| Effective history | ~0.23 iters | **~3 iters** |
+| Per-sample CPU cost | ~0 (already paid at push) | ~1.7 μs (vectorized) |
+| Per-batch sample time (256, on the 500K buffer) | ~0.4 ms | **0.44 ms** |
+| Memory (obs portion) | 1.49 GB | 2.48 GB |
+
+The vectorized augment-on-sample path is 34× faster than a single
+GPU forward (~15 ms), so it's effectively free.
+
+### Verification before relaunch
+
+Wrote a 9-step targeted test (`training/_test_correctness.py` plus an
+inline test in the session). Covered:
+1. All 8 symmetries match the reference `augment_8fold()` generator
+2. Pass action stays at index `N*N` under every symmetry
+3. Single-cell policies track the correct rotated/flipped destination
+4. `push()` stores 1 sample per call (was 8 before)
+5. `sample()` returns valid symmetries of stored data, contiguous,
+   correct shape and dtype
+6. Symmetry distribution is uniform across the 8 group elements
+   (corner cell lands in 4 corners with equal frequency, ±3σ)
+7. `save_to` / `load_from` round-trip preserves the raw buffer
+8. 100 sample-batches of size 256 from a 500K buffer: 44 ms total
+   (0.44 ms per batch — verified the vectorization)
+9. `torch.from_numpy(sample_output)` produces a contiguous tensor
+   (no negative-stride views)
+
+All passed.
+
+### Memory tightness — second OOM near-miss
+
+First relaunch (pid 6440) re-enabled buffer persistence on top of the
+500K raw buffer, on the theory that 500K raw uses the same RAM as
+the old 500K-augmented config. But the **savez transient at 87%
+buffer fill pushed peak RSS to 42.84 GiB — exactly at the 42.83 GiB
+cgroup cap**. Iter 24 would have OOM'd. Killed and relaunched (pid
+6637) with **persistence disabled but 500K capacity kept**. Steady
+state ~37 GiB, ~5.4 GiB headroom, comfortable.
+
+The lesson: persistence is high-value but at a 500K buffer it's a
+luxury we can't afford on this host. Phase 2's `uint8` plan in
+`PHASE_TWO_TODO.md` will free enough memory to re-enable it.
+
+### What changed externally
+
+- `model/config.py`: `buffer_size=300_000 → 500_000` (9x9 preset)
+- `model/config.py`: `lr_init=0.005` (halved from default 0.01) —
+  applied as a one-shot LR cut between iter 21 and iter 22 to slow
+  the residual BN drift
+- `training/replay_buffer.py`: full rewrite of push/sample paths;
+  `SYMMETRIES` constant; `_apply_symmetry_batch` helper; reference
+  `augment_8fold` kept for tests
+- `training/parallel_self_play.py`, `training/_bench_selfplay.py`,
+  `training/self_play.py`: drop `augment=True` from `push()` calls
+- `training/train.py`: re-enabled `buffer.save_to(...)` then disabled
+  again after the iter-23 near-OOM
+
+### Validation — the strength curve confirms the fix
+
+| matchup | score | verdict |
+|---|---:|---|
+| iter 30 vs iter 21 (post-redesign vs pre-redesign peak) | **0.760** | STRONG |
+| iter 34 vs iter 30 (4 iters into the plateau) | 0.640 | STRONG |
+| iter 39 vs iter 34 (5 more plateau iters) | 0.560 | meaningful |
+| iter 39 vs iter 30 (full plateau span) | 0.720 | STRONG |
+| iter 39 vs iter 21 (full new-regime span) | **0.940** | STRONG |
+| iter 39 vs iter 9 (run-spanning) | **0.980** | STRONG |
+
+All STRONG or meaningful. **The buffer redesign was the highest-value
+single intervention of the entire phase.** Loss numbers plateaued at
+~2.0 from iter 30 onward but real strength kept climbing — the
+plateau is fine-grained tactical refinement that the loss curve can't
+see but head-to-head play picks up cleanly.
+
+---
+
 ## Run 2 — live training
 
 ### Verification before launch
@@ -594,6 +759,35 @@ lines immediately and root-cause before restarting.)_
 | 20 | 2.7321 | 2.0529 | 0.6792 | 503.2 s | 99 | 4.1 | Loss virtually unchanged from iter 19. Stable plateau confirmed. |
 | 21 | 2.7400 | 2.0686 | 0.6714 | 553.4 s | 106 | 3.7 | **Longest avg moves of the run (106).** Loss has held in the 2.73-2.83 band for 4 iters. Training paused after this iter to run a comprehensive strength-curve tournament. |
 
+#### Buffer redesign + LR cut (resumed iter 22)
+
+Between iter 21 and iter 22 the **replay buffer was redesigned**
+(see Problem 5 above) and **`lr_init` halved 0.01 → 0.005**. The
+buffer now stores 500K *raw* positions and applies symmetry at sample
+time, giving ~3 iters of effective history (vs ~0.23 before). Two
+near-OOM scares hit during the redesign — Problem 5 has details.
+
+| iter | total | pi | v | self-play time | avg moves | games/s | note |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 22 | 2.5310 | 1.9681 | 0.5628 | 573.5 s | 105 | 3.6 | First iter post-redesign. Loss drop -0.21 from iter 21. lr=0.00398 (≈ half of iter 21's 0.00811 — halved correctly). buf=215634 (raw pushes, no aug ×8). |
+| 23 | 2.4004 | 1.8948 | 0.5056 | 536.5 s | 106 | 3.8 | Policy new low 1.89. buf=433047 still accumulating. **First near-OOM** — savez transient pushed peak to 42.84 GiB exactly at the cap. Killed and relaunched (pid 6440 → 6637) with persistence disabled. |
+| 24 | 2.2739 | 1.7448 | 0.5292 | 557.7 s | 102 | 3.7 | First iter of pid 6637. Buffer empty again (no persistence) → fills from iter 24's self-play. Policy new low 1.74. RSS 31.7 GiB, ~11 GiB headroom. |
+| 25 | 2.2571 | 1.7192 | 0.5379 | 508.7 s | 101 | 4.0 | Policy new low 1.72. buf=415302 still accumulating. |
+| 26 | 2.2170 | 1.7000 | 0.5171 | 496.8 s | 100 | 4.1 | **Buffer first hits 500K cap.** RSS 37.4 GiB, 5.4 GiB headroom — stable steady state. Policy new low 1.70. |
+| 27 | 2.1715 | 1.6649 | 0.5066 | 479.6 s | 96 | 4.3 | Policy new low 1.66. Steady-state self-play resumed. |
+| 28 | 2.1214 | 1.6346 | 0.4868 | 484.4 s | 97 | 4.2 | Policy new low 1.63 **and** value new low 0.49 simultaneously. Cleanest training pattern of the entire run. |
+| 29 | 2.0817 | 1.6051 | 0.4766 | 480.4 s | 96 | 4.3 | Policy new low 1.61, value new low 0.48. Eval vs random = 100%. |
+| 30 | 1.9727 | 1.5330 | 0.4397 | 478.5 s | 96 | 4.3 | **Total breaks 2.0** (1.97). Policy new low 1.53, value new low 0.44. Mid-run head-to-head: **iter 30 vs iter 21 = 0.760 STRONG**. The buffer redesign + halved LR is producing real strength, not just lower loss. |
+| 31 | 2.0085 | 1.5533 | 0.4553 | 460.4 s | 87 | 4.5 | Slight wobble (+0.04). |
+| 32 | 2.0211 | 1.5437 | 0.4774 | 453.1 s | 90 | 4.5 | Loss now plateauing in the 2.00-2.06 band. |
+| 33 | 2.0629 | 1.5425 | 0.5204 | 430.5 s | 86 | 4.8 | Plateau holding. Throughput climbing as games shorten. |
+| 34 | 2.0448 | 1.5257 | 0.5191 | 451.5 s | 90 | 4.5 | Eval vs random = 99% (1 noise game). Mid-run head-to-head: **iter 34 vs iter 30 = 0.640 STRONG**. The plateau is producing real strength even though loss is flat. |
+| 35 | 2.0142 | 1.4862 | 0.5280 | 456.7 s | 87 | 4.5 | **Policy breaks 1.50** (1.49 new low). |
+| 36 | 1.9885 | 1.4557 | 0.5328 | 422.8 s | 84 | 4.9 | Total back below 2.0 (1.99). Policy new low 1.46. |
+| 37 | 2.0656 | 1.4891 | 0.5765 | 427.1 s | 85 | 4.8 | Single-iter wobble (+0.08). |
+| 38 | 2.0804 | 1.5001 | 0.5803 | 439.8 s | 87 | 4.7 | Plateau still holding 1.97-2.08 band, iter 36 the floor. |
+| 39 | 2.0325 | 1.4764 | 0.5561 | 421.7 s | 84 | 4.9 | **Final iter of run 2.** Eval vs random = 100%. Policy 1.48, value 0.56. Training stopped here for the comprehensive head-to-head tournament. |
+
 ### Iter-21 weight audit
 
 ```
@@ -637,6 +831,27 @@ Anchor: `checkpoint_0009.pt`. All other checkpoints play against it.
 
 Sanity check: **iter 0 vs iter 21 = 0.000** (0–25, 0 ties). The end
 of the run is dramatically stronger than the start, as expected.
+
+#### Generational matchups (post-redesign chain)
+
+After Problem 5's buffer redesign + LR cut, training continued from
+iter 22 through iter 39. Generational head-to-heads at the end of
+each phase:
+
+| matchup | score | 95% CI | pairs | ties | verdict |
+|---|---:|---|---:|---:|---|
+| iter 21 vs iter 9 | 1.000 | [0.87, 1.00] | 25–0 | 0 | STRONG (pre-redesign peak) |
+| **iter 30 vs iter 21** | **0.760** | [0.57, 0.89] | 13–0 | 12 | **STRONG (buffer redesign + LR cut pays off)** |
+| iter 34 vs iter 30 | 0.640 | [0.45, 0.80] | 9–2 | 14 | STRONG (plateau iters yield real gains) |
+| iter 39 vs iter 34 | 0.560 | [0.37, 0.73] | 9–6 | 10 | meaningful (slow plateau refinement) |
+| iter 39 vs iter 30 | 0.720 | [0.52, 0.86] | 14–3 | 8 | STRONG (full plateau span) |
+| **iter 39 vs iter 21** | **0.940** | [0.78, 0.99] | 22–0 | 3 | **STRONG (full new-regime span)** |
+| **iter 39 vs iter 9** | **0.980** | [0.83, 1.00] | 24–0 | 1 | **STRONG (run-spanning, near-total dominance)** |
+
+Iter 39 is the final post-fix snapshot. **Every generation strictly
+improves on the previous** — no regression at any step in the entire
+40-iter run, including the supposedly-flat plateau iters 30–39 which
+the loss curve made look like stagnation.
 
 ### Three things the tournament tells us
 

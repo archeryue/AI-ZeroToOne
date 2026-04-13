@@ -70,9 +70,13 @@ CONFIGS = {
             num_simulations=400,
             dirichlet_alpha=0.11,
             num_games_per_iter=2048,
-            # 300K (~1.58 GB in RAM) fits under the 42.8 GB cgroup
-            # memory limit on this host; 500K pushed us over.
-            buffer_size=300_000,
+            # 500K raw positions = 2.64 GB. Same RAM as the original
+            # 500K *augmented* config (which OOM'd because it stored
+            # 62.5K raw × 8 aug at push time and pushed peak past 42 GB
+            # via the savez transient). The buffer redesign moved
+            # augmentation to sample time, so 500K slots now hold 500K
+            # *distinct* positions — ~3 iters of effective history.
+            buffer_size=500_000,
             max_game_moves=150,
             # Exploration phase covers ~half the avg game (~85 moves) so
             # mid-game positions stay diverse in the replay buffer.
@@ -80,6 +84,10 @@ CONFIGS = {
             # targets instead of collapsing to one-hot argmax.
             temperature_moves=30,
             temperature_low=0.25,
+            # Halved from default 0.01 starting at run 2 iter 22 to slow
+            # the BN drift visible in the iter-9..21 weight audit. The
+            # cosine schedule is otherwise unchanged.
+            lr_init=0.005,
             checkpoint_interval=1,
             eval_interval=5,  # tighter than default so we catch drift early
         ),

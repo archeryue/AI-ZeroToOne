@@ -1,39 +1,93 @@
-"""Circular replay buffer with 8-fold symmetry augmentation for Go."""
+"""Circular replay buffer for AlphaZero self-play data.
+
+Design note (run-2 redesign):
+  Earlier the buffer stored 8 augmented copies of every position at
+  push time. With ~165K positions per iter and 8-fold augmentation,
+  push() ran 1.32M times per iter into a 300K-capacity buffer,
+  wrapping the buffer ~4.4× per iter. Effective history was the last
+  ~37.5K positions of the most-recent self-play iter — the trainer
+  was always fitting on its own just-played games with no real
+  diversity.
+
+  The fix: store ONE raw position per push, apply a random symmetry
+  per sample at training time. Same memory, **8× the effective
+  diversity**, history goes from ~0.23 iters to ~1.8 iters. Vectorized
+  in `sample()` by bucketing the batch by symmetry and rotating each
+  bucket once.
+"""
 
 import os
 import numpy as np
 
 
+# ─── Symmetry helpers ───────────────────────────────────────────────
+
+# 8 group elements: 4 rotations × {identity, horizontal flip}.
+# Each element is a (k, flip) tuple where k is the np.rot90 count.
+SYMMETRIES = [(k, f) for k in range(4) for f in (False, True)]
+
+
 def augment_8fold(obs: np.ndarray, policy: np.ndarray, board_size: int):
-    """Apply 8-fold symmetry (4 rotations x 2 reflections) to a single sample.
+    """Yield all 8 symmetries of a single (obs, policy) pair.
+
+    Reference implementation kept for the smoke tests. Production
+    sampling uses the vectorized path inside ReplayBuffer.sample().
 
     Args:
         obs: (17, N, N) observation planes
         policy: (N*N+1,) policy vector — last element is pass probability
         board_size: N
-
-    Yields:
-        (obs_aug, policy_aug) for each of the 8 symmetries
     """
     N = board_size
     pass_prob = policy[-1]
     board_policy = policy[:-1].reshape(N, N)
 
-    for k in range(4):  # 0, 90, 180, 270 degrees
-        for flip in (False, True):
-            obs_t = np.rot90(obs, k, axes=(1, 2)).copy()
-            pol_t = np.rot90(board_policy, k).copy()
-            if flip:
-                obs_t = np.flip(obs_t, axis=2).copy()
-                pol_t = np.flip(pol_t, axis=1).copy()
-            policy_t = np.append(pol_t.ravel(), pass_prob)
-            yield obs_t, policy_t
+    for k, flip in SYMMETRIES:
+        obs_t = np.rot90(obs, k, axes=(1, 2)).copy()
+        pol_t = np.rot90(board_policy, k).copy()
+        if flip:
+            obs_t = np.flip(obs_t, axis=2).copy()
+            pol_t = np.flip(pol_t, axis=1).copy()
+        policy_t = np.append(pol_t.ravel(), pass_prob)
+        yield obs_t, policy_t
 
+
+def _apply_symmetry_batch(obs_batch: np.ndarray, policy_batch: np.ndarray,
+                          k: int, flip: bool, N: int):
+    """Apply one (k, flip) symmetry to a whole batch at once.
+
+    Operates on the spatial axes of obs (last two) and the reshaped
+    board portion of policy. The pass action sits at policy[..., -1]
+    and is invariant under any board symmetry.
+    """
+    # obs: (B, 17, N, N) — rotate spatial axes
+    obs_t = np.rot90(obs_batch, k, axes=(2, 3))
+    if flip:
+        obs_t = np.flip(obs_t, axis=3)
+    # Force a contiguous copy so downstream torch.from_numpy doesn't
+    # see strided/negative-strides views (np.flip returns a view).
+    obs_t = np.ascontiguousarray(obs_t)
+
+    # policy: (B, N*N + 1). Split off pass, transform the (B, N, N)
+    # board half, then re-concatenate.
+    board_pol = policy_batch[:, :N * N].reshape(-1, N, N)
+    pass_pol = policy_batch[:, -1:]
+    board_pol_t = np.rot90(board_pol, k, axes=(1, 2))
+    if flip:
+        board_pol_t = np.flip(board_pol_t, axis=2)
+    board_pol_t = np.ascontiguousarray(board_pol_t)
+    pol_t = np.concatenate(
+        [board_pol_t.reshape(-1, N * N), pass_pol], axis=1)
+    return obs_t, pol_t
+
+
+# ─── ReplayBuffer ───────────────────────────────────────────────────
 
 class ReplayBuffer:
     """Fixed-size circular buffer storing (obs, policy, value) tuples.
 
-    Stores pre-allocated numpy arrays for zero-copy sampling.
+    Stores raw (un-augmented) positions. Augmentation is applied
+    randomly per sample at training time via `sample()`.
     """
 
     def __init__(self, capacity: int, board_size: int, input_planes: int = 17):
@@ -49,16 +103,21 @@ class ReplayBuffer:
         self.size = 0
         self.index = 0
 
-    def push(self, obs: np.ndarray, policy: np.ndarray, value: float,
-             augment: bool = True):
-        """Add a sample (with optional 8-fold augmentation)."""
-        if augment:
-            for obs_t, pol_t in augment_8fold(obs, policy, self.board_size):
-                self._store(obs_t, pol_t, value)
-        else:
-            self._store(obs, policy, value)
+    def push(self, obs: np.ndarray, policy: np.ndarray, value: float):
+        """Add one raw position to the buffer.
+
+        Augmentation is no longer done at push time — it happens at
+        sample time so the buffer holds 8× more distinct positions.
+        """
+        idx = self.index % self.capacity
+        self.obs[idx] = obs
+        self.policy[idx] = policy
+        self.value[idx] = value
+        self.index += 1
+        self.size = min(self.size + 1, self.capacity)
 
     def _store(self, obs: np.ndarray, policy: np.ndarray, value: float):
+        """Direct insert without symmetry. Used by tests + load_from."""
         idx = self.index % self.capacity
         self.obs[idx] = obs
         self.policy[idx] = policy
@@ -67,9 +126,39 @@ class ReplayBuffer:
         self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Sample a random batch. Returns (obs, policy, value) numpy arrays."""
+        """Sample a random batch, applying a random symmetry per sample.
+
+        Each sampled position is transformed by one of the 8 dihedral
+        symmetries, chosen uniformly at random per sample. The batch
+        is processed in 8 buckets (one per symmetry) so each rotation
+        runs once on a contiguous sub-batch — much faster than a
+        per-sample Python loop.
+        """
+        N = self.board_size
+        # Sample positions uniformly with replacement (replacement is
+        # fine here: 256-batch from a 300K buffer, collision odds are
+        # ~1/1000 per pair and don't bias the gradient).
         indices = np.random.randint(0, self.size, size=batch_size)
-        return self.obs[indices], self.policy[indices], self.value[indices]
+        sym_choices = np.random.randint(0, 8, size=batch_size)
+
+        raw_obs = self.obs[indices]        # (B, 17, N, N)
+        raw_pol = self.policy[indices]     # (B, N*N+1)
+        out_value = self.value[indices].copy()  # values are scalar, sym-invariant
+
+        out_obs = np.empty_like(raw_obs)
+        out_pol = np.empty_like(raw_pol)
+
+        # Bucket by symmetry id and process each bucket as one rotation.
+        for sym_id, (k, flip) in enumerate(SYMMETRIES):
+            mask = sym_choices == sym_id
+            if not mask.any():
+                continue
+            obs_t, pol_t = _apply_symmetry_batch(
+                raw_obs[mask], raw_pol[mask], k, flip, N)
+            out_obs[mask] = obs_t
+            out_pol[mask] = pol_t
+
+        return out_obs, out_pol, out_value
 
     def save_to(self, path: str) -> None:
         """Persist current live samples to a .npz file.

@@ -168,7 +168,7 @@ def run_self_play(
         samples = play_one_game(net, device, model_cfg, train_cfg, game_id=i)
 
         for obs, policy, value in samples:
-            buffer.push(obs, policy, value, augment=True)
+            buffer.push(obs, policy, value)
 
         total_positions += len(samples)
         total_moves += len(samples)

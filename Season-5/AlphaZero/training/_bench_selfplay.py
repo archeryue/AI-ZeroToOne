@@ -109,7 +109,7 @@ class LimitedSP(ParallelSelfPlay):
                     obs_np, pol_np, val_np, count = worker.harvest()
                     if count > 0:
                         for j in range(count):
-                            buffer.push(obs_np[j], pol_np[j], val_np[j], augment=True)
+                            buffer.push(obs_np[j], pol_np[j], val_np[j])
                         total_positions += count
                 harvest_dt = time.perf_counter() - harvest_start
 

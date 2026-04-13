@@ -271,10 +271,14 @@ def main():
             print(f"         | Train: skipped (buffer {len(buffer)} < "
                   f"batch {train_cfg.batch_size})")
 
-        # Buffer persistence deliberately disabled: the np.savez transient
-        # pushed peak memory over the 42.8 GB cgroup limit on this host
-        # (silent SIGKILL after iter 1, see PHASE_ONE_TRAINING Part 4).
-        # The code path (save_to/load_from + --anchor-buffer) stays for
+        # Buffer persistence disabled (again). Tried re-enabling at
+        # iter 22 with the redesigned 500K-raw buffer; the np.savez
+        # transient + the larger steady-state RSS pushed peak memory
+        # to 42.84 GiB, exactly at the 42.83 GiB cgroup cap. Iter 24
+        # would have OOM'd. The savez file at half-full was already
+        # 2.4 GB. We keep the 500K capacity (the diversity win is
+        # high-value) and accept losing the buffer on restart. The
+        # save_to / load_from / --anchor-buffer code paths stay for
         # future hosts with more memory headroom.
 
         # 3. Evaluate periodically
