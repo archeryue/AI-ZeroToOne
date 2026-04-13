@@ -271,11 +271,11 @@ def main():
             print(f"         | Train: skipped (buffer {len(buffer)} < "
                   f"batch {train_cfg.batch_size})")
 
-        # Persist buffer so a restart doesn't reset it to empty.
-        try:
-            buffer.save_to(buffer_path)
-        except OSError as e:
-            print(f"         | Buffer save failed: {e}")
+        # Buffer persistence deliberately disabled: the np.savez transient
+        # pushed peak memory over the 42.8 GB cgroup limit on this host
+        # (silent SIGKILL after iter 1, see PHASE_ONE_TRAINING Part 4).
+        # The code path (save_to/load_from + --anchor-buffer) stays for
+        # future hosts with more memory headroom.
 
         # 3. Evaluate periodically
         eval_stats = {}

@@ -70,7 +70,9 @@ CONFIGS = {
             num_simulations=400,
             dirichlet_alpha=0.11,
             num_games_per_iter=2048,
-            buffer_size=500_000,
+            # 300K (~1.58 GB in RAM) fits under the 42.8 GB cgroup
+            # memory limit on this host; 500K pushed us over.
+            buffer_size=300_000,
             max_game_moves=150,
             # Exploration phase covers ~half the avg game (~85 moves) so
             # mid-game positions stay diverse in the replay buffer.

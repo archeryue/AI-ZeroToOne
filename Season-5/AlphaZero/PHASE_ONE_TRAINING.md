@@ -107,34 +107,96 @@ self.value_pinned.copy_(values, non_blocking=True)
 torch.cuda.synchronize()
 ```
 
+### Root cause 1c — `torch.compile` not engaged, then misconfigured
+
+The original self-play forward path ran the model in eager mode.
+`torch.compile` with the right settings is worth ~20–30% on batched
+inference for a small conv tower like ours, but getting it right took
+several attempts.
+
+**What we ended up with** (`training/parallel_self_play.py`):
+
+```python
+if self.use_cuda and os.environ.get("AZ_COMPILE", "1") != "0":
+    try:
+        self.infer_net = torch.compile(net, mode="max-autotune")
+    except Exception as e:
+        print(f"[ParallelSelfPlay] torch.compile disabled: {e}")
+        self.infer_net = net
+```
+
+Three things had to land together for this to actually pay off:
+
+1. **`mode="max-autotune"`** instead of `reduce-overhead`. The
+   autotuned Triton kernels bought another ~10% over the default
+   mode on bs=2048, 17×9×9 inputs.
+2. **Fixed-shape forward.** Initially we passed only the "live" slice
+   `obs_pinned[:total_nn]` to the compiled net. `total_nn` varies
+   per tick (some workers have fewer active games), so torch.compile
+   recompiled on every unique shape — the guards triggered, the
+   autotune cache missed, and we saw multi-second recompile spikes
+   mid-iter. **Fix:** always pass the *full* `total_max_nn` buffer
+   to `self.infer_net(obs_tensor)`. Trailing slots contain stale
+   data, but each worker only reads back the first `nn_count`
+   entries of its own policy/value slice, so the stale outputs are
+   harmless. This locks the compiled kernel onto a single shape for
+   the entire run.
+3. **`AZ_COMPILE=0` escape hatch** for smoke tests. Warmup +
+   autotune for iter 0 takes ~2 min on a 4090, which dominates
+   short test runs. Setting `AZ_COMPILE=0` gives eager mode for
+   test scripts (`_test_correctness.py`, smoke tests) while the
+   real run keeps it on.
+
+There's a fourth piece that shows up in the monitor: on the real run
+the first iter's log contains a big block of `AUTOTUNE mm(...)` lines
+from inductor — that's the normal Triton kernel-selection pass.
+It's expected and it's why iter 0 takes ~7 min instead of the ~5 min
+steady-state.
+
 ### Other optimizations landed
 
-1. **`torch.compile(mode="max-autotune")`** with **fixed-shape
-   forward** (always pass the full `total_max_nn` buffer so
-   torch.compile locks onto a single kernel shape — no recompile
-   spikes).
-2. **Zero-copy pinned buffers** — numpy view over the pinned tensor
+1. **Zero-copy pinned buffers** — numpy view over the pinned tensor
    so C++ workers write leaf observations straight into pinned
-   memory, eliminating a staging `np.concatenate` + copy.
-3. **`network.py`: `.view()` → `.flatten(1)`** in the policy/value
-   heads (layout-agnostic).
-4. **TF32 matmul** via `set_float32_matmul_precision("high")`.
+   memory, eliminating a staging `np.concatenate` + copy. Saves ~3 ms
+   per tick. (Later replaced with per-worker *owned* arrays while
+   hunting the SIGSEGV — the ownership change didn't affect the win,
+   it just eliminated a shared-pointer class of bugs. See Problem 2.)
+2. **`network.py`: `.view()` → `.flatten(1)`** in the policy/value
+   heads. Layout-agnostic; required for any NHWC experiment and
+   doesn't hurt NCHW.
+3. **TF32 matmul** via `set_float32_matmul_precision("high")`. Free
+   on Ampere/Ada — no quality cost at this model size.
+4. **Separate H2D / D2H pinned tensors** with explicit
+   `torch.cuda.synchronize()` after the D2H copy (see Root cause 1b).
 
 ### What was rejected
 
-- **Channels-last / NHWC** — +1.8 ms GPU+xfer on our model; transpose
-  cost outweighs kernel win.
-- **Cutting `num_simulations` / `num_parallel_games`** — no MCTS
-  quality sacrifice.
-- **Pipelining worker-select with GPU forward** — adds a 1-tick lag
-  between selection and tree update, subtle MCTS quality tradeoff.
+- **Channels-last / NHWC** — +1.8 ms GPU+xfer on our model
+  (10b × 128ch, bs 2048). The transpose cost on every tick outweighs
+  the kernel win for a model this small.
+- **Cutting `num_simulations` / `num_parallel_games`** — explicitly
+  off-limits, no MCTS quality sacrifice.
+- **Pipelining worker-select with GPU forward** — would add a 1-tick
+  lag between selection and tree update, a subtle MCTS quality
+  tradeoff. Held off per the no-sacrifice constraint.
+
+### `PLAN.md`'s GPU estimate was wildly optimistic
+
+PLAN.md assumed **0.5 ms** per batched forward on a 4090. Measured:
+**15.2 ms** (~30× slower). Theoretical floor is ~5.8 ms (~490 GFLOPs
+at bs 2048 ÷ ~85 TFLOPS bf16 peak), so 15 ms is reasonable for a
+small conv tower where kernel launch + memory bandwidth dominate.
+
+Consequence: PLAN's \$1.1 / 2.5 h-per-run estimate was never
+physically reachable. Real cost is **~\$8 / ~13.5 h per run**.
 
 ### Result
 
-Iter 0 of Phase 1 (first run): 2049 games, 157K positions, 644 s
-self-play time, **3.2 games/s**. PLAN.md had assumed 0.5 ms/forward;
-real number is 15.2 ms, so PLAN's \$1.1 / 2.5 h per run was never
-reachable. Real cost is **~\$8 / ~13.5 h per run**.
+Iter 0 of Phase 1 (run 1): 2049 games, 157K positions, 644 s
+self-play time, **3.2 games/s**, initial loss 5.25 (π=4.37, v=0.88).
+Run 2 iter 0 with wider temperature + slightly faster pipeline:
+2048 games, 156K positions, 444 s, **4.6 games/s**, loss 5.23.
+The pipeline is now GPU-forward-bound, not CPU-bound.
 
 ---
 
