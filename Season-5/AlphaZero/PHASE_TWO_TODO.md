@@ -3,6 +3,12 @@
 Followups from Phase 1 work that should land before kicking off the
 13x13 self-play run. Not blocking Phase 1 itself.
 
+**Status (2026-04-14):** code-side prep items 1–3 are landed and
+committed on `claude/review-alphazero-project-2xT2d` (commit
+`59e0c84`). Items 4–5 run on the training host — see
+[Starting Phase 2 on a new device](#starting-phase-2-on-a-new-device)
+at the bottom for the exact commands.
+
 ---
 
 ## 1. Replay buffer: store obs as `uint8` (Option A)
@@ -126,13 +132,15 @@ These are not bugs, just choices that need a fresh look because
 - **`max_game_moves=250`** per PLAN.md for 13x13 vs 150 for 9x9.
   Already in `model/config.py` 13x13 preset.
 
-## 3. Buffer persistence — re-evaluate
+## 3. Buffer persistence — re-enabled ✅
 
-Buffer persistence is currently disabled in `train.py` because the
-`np.savez` transient pushed the 9x9 run over the 42.8 GB host's
-memory limit. With `uint8` storage the Phase 2 obs buffer is 2.87 GB
-instead of 11.49 GB, so the savez transient is also ~4× smaller and
-should fit. Re-enable for Phase 2 once Option A lands.
+Buffer persistence was disabled in `train.py` during Phase 1 because
+the `np.savez` transient pushed the 9x9 run over the 42.8 GB host's
+memory limit. With `uint8` storage the 13x13 1M obs buffer is 2.87 GB
+instead of 11.49 GB, and the savez transient also shrank ~4×.
+`train.py` now calls `buffer.save_to(buffer_path)` every iteration
+again; watch peak RSS on the first iter or two to confirm the
+transient fits comfortably under the cgroup cap on the new host.
 
 ## 4. Anchor-buffer mixing — keep optional
 
@@ -169,3 +177,140 @@ hitting the reservation limit late in 13x13 self-play.
    CUDA + go_engine env is available. Watch peak RSS — should stay
    well under 35 GB with uint8 buffer.
 5. ⏭ **Launch full Phase 2.**
+
+---
+
+## Starting Phase 2 on a new device
+
+Handoff checklist for picking this up on a fresh training host (RTX
+4090-class GPU + CUDA + built `go_engine.*.so`).
+
+### 0. Sync the code
+
+```bash
+git fetch origin claude/review-alphazero-project-2xT2d
+git checkout claude/review-alphazero-project-2xT2d
+# Sanity: HEAD should include commit 59e0c84
+#   "Phase 2 prep: uint8 obs buffer + re-enable persistence + 13x13 temp schedule"
+git log --oneline -1
+```
+
+### 1. Build / rebuild the C++ engine
+
+The compiled `engine/go_engine.*.so` is platform + Python-ABI
+specific; always rebuild on a new host.
+
+```bash
+cd Season-5/AlphaZero/engine
+python setup.py build_ext --inplace
+cd ..
+python -c "import sys; sys.path.insert(0,'.'); import go_engine; print(go_engine.__file__)"
+```
+
+### 2. Correctness smoke (fast, CPU-ok)
+
+Run the end-to-end correctness test first. Stage `[1c]` is the new
+uint8 round-trip + save/load check added for Phase 2. All stages
+should pass:
+
+```bash
+# From Season-5/AlphaZero/ :
+python training/_test_correctness.py
+```
+
+Expected tail output: `ALL CORRECTNESS CHECKS PASSED`.
+
+### 3. 13x13 smoke test (3 iters, real GPU)
+
+```bash
+python -m training.train \
+    --board-size 13 \
+    --smoke-test \
+    --output-dir checkpoints/13x13_smoke
+```
+
+`--smoke-test` shrinks model to 2b×32ch, 16 sims, 32 games/iter,
+3 iters. Goal is to exercise the **full pipeline end-to-end** on
+the 13x13 code path (board size, buffer shapes, augmentation,
+save/load) without waiting hours.
+
+**What to watch:**
+
+- `ps -o rss= -p <pid>` or equivalent peak RSS — should stay **well
+  under 20 GB** for the smoke config. If it doesn't, investigate
+  before the full run.
+- `buffer.save_to` runs each iter → expect `latest_buffer.npz` to
+  appear in the output dir and grow roughly as samples accumulate.
+- No SIGKILL / no Python tracebacks at exit.
+- `evaluate_vs_random` at iter 2/3 completes without crashing (win
+  rate will be ~50% — we only trained 3 iters of a tiny model).
+
+### 4. Full Phase 2 run
+
+Once the smoke test passes cleanly:
+
+```bash
+# Logs + checkpoints to their own dir
+mkdir -p logs checkpoints/13x13_run1
+
+nohup python -m training.train \
+    --board-size 13 \
+    --iterations 60 \
+    --output-dir checkpoints/13x13_run1 \
+    > logs/13x13_run1.log 2>&1 &
+
+# Watch
+tail -f logs/13x13_run1.log
+```
+
+Expected per-iter (from `CONFIGS[13]`): 2048 games × 600 sims on a
+15b×128ch net. Peak RSS should stabilize around **25–30 GB**
+(1M-sample uint8 obs buffer = 3.6 GB, MCTS trees + compile cache
+dominate the rest). **Hard ceiling is the 42.8 GB cgroup** —
+`oom_kill_disable=1` means going over produces a silent SIGKILL
+with no traceback, so watch RSS on the first 2–3 iters before
+walking away.
+
+**Phase 2 starts without anchor-buffer mixing.** If the
+iter-4→19 BN-drift pattern from 9x9 run 1 reappears (tournament
+strength stalls or regresses while training loss keeps dropping),
+restart from the last known-good checkpoint with `--anchor-buffer
+path/to/anchor_buffer.npz --anchor-frac 0.2`, same as 9x9 run 2's
+recovery.
+
+### 5. Things to double-check after the first training iter
+
+- `training_log.jsonl` line 0 contains sane `self_play` stats (>0
+  games, >0 positions, avg moves in 80–160 range for 13x13).
+- `train.loss` is finite and roughly 6–7 on iter 0 (cold net);
+  `train.skipped` is 0 or very small.
+- `ls checkpoints/13x13_run1/` shows `checkpoint_0000.pt` (36 MB at
+  15b×128ch ≈ 7 MB params × 4 B + optimizer state).
+- `checkpoints/13x13_run1/latest_buffer.npz` exists and is ~3.5 GB
+  after the buffer fills.
+
+### 6. If something looks off — diagnostic hooks already wired
+
+- `faulthandler` prints all Python thread stacks on any fatal signal
+  and every 5 min to stderr (`train.py:28-37`). Tail the log for a
+  traceback when RSS looks suspicious.
+- `kill -USR1 <pid>` dumps live thread stacks on demand.
+- Grad-clip (L2 norm 5.0) + NaN-guard in `trainer.py::train_step`
+  skip poisoned steps instead of nuking the weights; watch the
+  `skipped_total` counter in the per-iter train log.
+- Per-iter `latest_buffer.npz` persistence means a crash doesn't
+  lose the buffer — just resume with `--checkpoint
+  checkpoints/13x13_run1/checkpoint_NNNN.pt`.
+
+### 7. Post-run deliverables (mirror Phase 1)
+
+When the run finishes or you stop it:
+
+1. Keep all per-iter `checkpoint_NNNN.pt` files — they're cheap
+   (~36 MB each × 60 iters ≈ 2.2 GB) and Phase 1 showed that
+   post-hoc weight-drift audits are worthless without them.
+2. Run the round-robin Bradley-Terry tournament across every
+   checkpoint to get the Elo curve (same pipeline as
+   `9x9_run2_tournament`).
+3. Open a `PHASE_TWO_TRAINING.md` diary file mirroring
+   `PHASE_ONE_TRAINING.md` and log problems as they come up.
