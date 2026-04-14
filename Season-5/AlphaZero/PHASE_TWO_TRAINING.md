@@ -635,4 +635,117 @@ fit next iter when the buffer is still filling toward 1M samples.
 
 ## Run 1 — live training
 
-*(to be filled in once the full Phase 2 run starts)*
+### Attempt 1: aborted mid-iter-1 (2026-04-14 ~10:30–11:22 UTC)
+
+Launched the full 60-iter run at ~10:31 after v4 validated the config
+end-to-end. Iter 0 completed cleanly; iter 1 was killed at 76 % by
+Claude when the monitored `memory.usage_in_bytes` crossed the safety
+line. Iter 0 artifacts are preserved and resumable.
+
+**Iter 0 results (identical to v4 within noise):**
+
+| metric | value |
+|---|---:|
+| self-play time | 2426.8 s (40.5 min) |
+| total iter time | 2430.4 s |
+| games | 2048, positions 294,816 |
+| avg moves / game | 144 |
+| ticks | 61,851 @ 25.5 /s |
+| train loss | 5.974 (π=5.145, v=0.828) |
+| grad skips | 0 |
+| `checkpoint_0000.pt` | 36.5 MB ✓ |
+| `latest_buffer.npz` | 1.05 GB (294,816 positions) ✓ |
+
+Iter 0 self-play ran smoothly between **~22 GB and ~30 GB** cgroup
+`memory.usage_in_bytes`, matching v4. The `| sp:` progress log landed
+and is working as designed — 30 s cadence, clean format, ETA
+converging from noisy-early toward ~40 min real.
+
+### Problem 2 — `memory.usage_in_bytes` double-counts page cache
+
+**What happened.** Between the iter 0→1 boundary and iter 1 self-play,
+cgroup `memory.usage_in_bytes` climbed past v4's 31 GB steady state
+and accelerated:
+
+```
+check         cgroup   peak     note
+T+42 min      33.87 GB 33.87    iter 0 just completed, iter 1 ~2 min in
+T+48 min      34.01 GB 34.25    +0.14 GB over 2 min
+T+50 min      34.52 GB 34.55    +0.51 GB over 2 min (accelerating)
+abort window  -        35.02    crossed the line between checks
+```
+
+I SIGTERM'd run1 at T+50:22 before iter 1's end-of-iter savez
+transient could fire — projected peak would have been 36–37 GB.
+
+**Post-kill diagnosis via `memory.stat`:**
+
+```
+cache:         2.57 GB   ← reclaimable page cache
+rss:           0.45 GB   ← actual anon memory
+inactive_file: 2.38 GB   ← almost all of it is the 1 GB latest_buffer.npz
+                           plus compiled inductor artifacts
+```
+
+Only **~0.45 GB was real anon memory** on an idle container; **~2.57
+GB was page cache** sitting in `inactive_file` — exactly what you'd
+expect from a ~1 GB `latest_buffer.npz` (written at iter 0 end and
+still hot in the cache) plus the inductor compile artifacts written
+during training.
+
+**The 35 GB limit is on `memory.usage_in_bytes`, which sums anon +
+cache**, and I was monitoring that. Cgroup v1's usage metric doesn't
+distinguish reclaimable cache from unreclaimable rss. The kernel would
+have reclaimed the cache under real memory pressure before OOM, but:
+
+1. The user's stated rule is based on the number they'd see (`usage`).
+2. I couldn't tell from live monitoring how much of the usage was
+   cache vs rss without parsing `memory.stat` every poll.
+
+So ~3–5 GB of "memory pressure" on the dashboard was phantom
+reclaimable cache. **The real anon-memory peak was probably around
+30–31 GB**, comfortably under any real hardware limit.
+
+### Options for Attempt 2
+
+Presenting these rather than choosing one autonomously. **Nothing has
+been retuned; v4's config is still checked into main.** Iter 0 is
+resumable from `checkpoints/13x13_run1/checkpoint_0000.pt`.
+
+1. **Drop page cache after every buffer.save_to** (~5 lines in
+   `replay_buffer.save_to`). `os.posix_fadvise(fd, 0, 0,
+   POSIX_FADV_DONTNEED)` immediately after `np.savez` + `fsync`.
+   Frees the 1 GB latest_buffer.npz from the cgroup cache count.
+   **Zero impact on AI quality or speed**; purely a memory-accounting
+   fix. **My preferred option.**
+
+2. **Monitor `memory.stat: rss` instead of `memory.usage_in_bytes`.**
+   Makes the abort rule fire on real anon-only pressure instead of
+   on cache-inflated usage. No code changes to training, just to the
+   monitoring script. Same abort budget of 35 GB but against a smaller
+   number, so effective headroom grows by ~3-5 GB. Risk: if the
+   user's 35 GB was a cgroup-wide concern (not just rss), this
+   violates the spirit of their rule.
+
+3. **Lower `MAX_TREE_NODES` 1M → 500k.** Cuts MCTS peak from 19 GB to
+   9.6 GB, a 9.4 GB savings. Trades AI quality from ~3 % → ~7 %
+   convergence hit (~14 moves → ~7 moves between tree resets). Safe
+   but unnecessarily conservative if option (1) would suffice.
+
+4. **Lower `num_parallel_games` 256 → 192.** MCTS peak drops 19 → 14.4
+   GB. GPU batch drops 2048 → 1536, still well-utilized on a 4090.
+   Iter time impact small. Less aggressive than (3).
+
+5. **Combine (1) + (2).** Best-of-both: fix the cache accounting
+   issue AND switch to anon-only monitoring. Belt and suspenders.
+
+**Recommendation:** option (1) alone (or 1+2). v4's memory math was
+correct for real anon memory, the config is fine, and the only thing
+that went wrong was the 1 GB buffer file lingering in page cache. A
+trivial fix gets us back to running without touching the training
+config.
+
+**What I'm NOT doing autonomously:** picking one of these, rebuilding,
+relaunching. The user asked me to stop on anything uncertain, and
+this is exactly that. Iter 0 is safe, run1 dir is clean. Waiting for
+their decision.
