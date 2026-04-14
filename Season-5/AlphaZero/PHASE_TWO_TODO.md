@@ -152,10 +152,20 @@ hitting the reservation limit late in 13x13 self-play.
 
 ## Order of operations when Phase 1 finishes
 
-1. Land Option A in a single PR. Verify with the three-step test
-   above + a full `_test_correctness.py` smoke run.
-2. Re-enable `buffer.save_to(...)` in `train.py`.
-3. Update 13x13 preset in `model/config.py` per section 2 above.
-4. Run a 3-iter smoke test on the 13x13 config to validate memory
-   peaks under 35 GB.
-5. Launch full Phase 2.
+1. ✅ **Land Option A (uint8 obs).** `training/replay_buffer.py` stores
+   obs as `uint8`, push/load_from cast explicitly, sample() preserves
+   dtype. `training/trainer.py` casts to float after H2D. Verified
+   via standalone test: dtype check, round-trip identity, 8-way
+   symmetry correctness (match `augment_8fold` reference), pass
+   invariant, save_to/load_from exact round-trip, legacy float32
+   save compat, ±4σ symmetry uniformity.
+2. ✅ **Re-enable `buffer.save_to(...)` in `train.py`.** Comment
+   updated to point at this TODO section and the uint8 savings
+   (12.2 GB → 3.6 GB on the 13x13 1M buffer, savez transient ~4×
+   smaller).
+3. ✅ **Update 13x13 preset in `model/config.py`** per section 2:
+   `temperature_moves=40`, `temperature_low=0.25`.
+4. ⏭ **Run a 3-iter smoke test on the 13x13 config** once the full
+   CUDA + go_engine env is available. Watch peak RSS — should stay
+   well under 35 GB with uint8 buffer.
+5. ⏭ **Launch full Phase 2.**

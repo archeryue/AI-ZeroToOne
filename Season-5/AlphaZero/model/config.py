@@ -96,11 +96,17 @@ CONFIGS = {
         ModelConfig(board_size=13, num_blocks=15, channels=128),
         TrainingConfig(
             num_simulations=600,
-            dirichlet_alpha=0.07,
+            dirichlet_alpha=0.07,  # ≈ 10 / avg_legal_moves (~150 for 13x13)
             num_games_per_iter=2048,
             buffer_size=1_000_000,
             max_game_moves=250,
-            temperature_moves=20,
+            # 13x13 games average ~120 moves (vs ~85 on 9x9). Keep
+            # the exploration window at ~1/3 of the avg game like the
+            # tuned 9x9 run 2 preset — 40 moves here. temperature_low
+            # 0.25 (vs default 0.1) preserves runner-up move signal in
+            # the training targets instead of collapsing to argmax.
+            temperature_moves=40,
+            temperature_low=0.25,
         ),
     ),
     19: (

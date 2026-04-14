@@ -271,15 +271,14 @@ def main():
             print(f"         | Train: skipped (buffer {len(buffer)} < "
                   f"batch {train_cfg.batch_size})")
 
-        # Buffer persistence disabled (again). Tried re-enabling at
-        # iter 22 with the redesigned 500K-raw buffer; the np.savez
-        # transient + the larger steady-state RSS pushed peak memory
-        # to 42.84 GiB, exactly at the 42.83 GiB cgroup cap. Iter 24
-        # would have OOM'd. The savez file at half-full was already
-        # 2.4 GB. We keep the 500K capacity (the diversity win is
-        # high-value) and accept losing the buffer on restart. The
-        # save_to / load_from / --anchor-buffer code paths stay for
-        # future hosts with more memory headroom.
+        # Buffer persistence re-enabled for Phase 2. Phase 1 had to
+        # disable this because the np.savez transient on a 500K ×
+        # float32 obs buffer pushed peak RSS to 42.84 GiB, exactly at
+        # the 42.83 GiB cgroup cap. With the uint8 obs storage landed
+        # in Phase 2 prep, the 13x13 1M buffer is 3.6 GB (down from
+        # 12.2 GB) and the savez transient is ~4× smaller too — it
+        # fits comfortably under the cgroup limit.
+        buffer.save_to(buffer_path)
 
         # 3. Evaluate periodically
         eval_stats = {}

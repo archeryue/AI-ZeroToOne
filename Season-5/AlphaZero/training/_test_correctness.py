@@ -76,7 +76,9 @@ obs_arr = buffer.obs[:len(buffer)]
 pol_arr = buffer.policy[:len(buffer)]
 val_arr = buffer.value[:len(buffer)]
 
-assert np.isfinite(obs_arr).all(), "NaN/inf in obs"
+# obs is uint8 (Phase 2 memory optimization) — every value is integer
+# so isfinite is trivially True but we keep the assertion for clarity.
+assert obs_arr.dtype == np.uint8, f"obs dtype should be uint8, got {obs_arr.dtype}"
 assert np.isfinite(pol_arr).all(), "NaN/inf in policy"
 assert np.isfinite(val_arr).all(), "NaN/inf in value"
 assert np.all(val_arr >= -1.0 - 1e-5) and np.all(val_arr <= 1.0 + 1e-5), \
@@ -85,14 +87,52 @@ pol_sums = pol_arr.sum(axis=1)
 assert np.allclose(pol_sums, 1.0, atol=1e-3), \
     f"policy doesn't sum to 1: min={pol_sums.min()} max={pol_sums.max()}"
 obs_vals = np.unique(obs_arr)
-# obs planes should be 0/1 (stones + color-to-play)
-assert set(obs_vals.tolist()).issubset({0.0, 1.0}), \
+# obs planes should be 0/1 (stones + color-to-play) — uint8 after the
+# Phase 2 dtype change.
+assert set(obs_vals.tolist()).issubset({0, 1}), \
     f"obs not binary: {obs_vals[:10]}"
-print(f"  obs shape {obs_arr.shape}, binary ✓")
+print(f"  obs shape {obs_arr.shape} dtype {obs_arr.dtype}, binary ✓")
 print(f"  policy sums to 1 ✓ (min={pol_sums.min():.4f} max={pol_sums.max():.4f})")
 print(f"  value in [-1,1] ✓ (min={val_arr.min():.2f} max={val_arr.max():.2f})")
 print(f"  values distribution: mean={val_arr.mean():.3f} "
       f"(black-win frac if +1)")
+
+# ---- Stage 1c: uint8 obs round-trip + save/load ----
+# Per PHASE_TWO_TODO.md §"Verification before merging": prove the
+# uint8 cast is lossless for a float32 obs that came out of self-play.
+print("\n[1c] uint8 obs round-trip + save/load")
+import tempfile
+
+# Take a fresh float32 obs from a raw self-play sample (buffer[0] is
+# already uint8, so we materialize it back to float32 to simulate the
+# C++ engine output, then push it back and confirm identity).
+obs_f32_orig = buffer.obs[0].astype(np.float32)
+tmp_buf = ReplayBuffer(16, N)
+tmp_buf.push(obs_f32_orig, buffer.policy[0], buffer.value[0])
+obs_back = tmp_buf.obs[0].astype(np.float32)
+assert np.array_equal(obs_f32_orig, obs_back), \
+    "uint8 round-trip lost information — obs values outside {0, 1}?"
+print(f"  float32→uint8→float32 round-trip exact ✓")
+
+# save_to / load_from round-trip preserves the raw uint8 buffer.
+with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as tmpf:
+    tmp_path = tmpf.name
+try:
+    buffer.save_to(tmp_path)
+    restored = ReplayBuffer(train_cfg.buffer_size, N)
+    restored.load_from(tmp_path)
+    assert restored.size == buffer.size
+    assert restored.obs.dtype == np.uint8
+    assert np.array_equal(restored.obs[:restored.size],
+                          buffer.obs[:buffer.size])
+    assert np.array_equal(restored.policy[:restored.size],
+                          buffer.policy[:buffer.size])
+    assert np.array_equal(restored.value[:restored.size],
+                          buffer.value[:buffer.size])
+    print(f"  save_to / load_from round-trip exact ✓ "
+          f"({restored.size} samples)")
+finally:
+    os.unlink(tmp_path)
 
 # ---- Stage 2: training loss decreases ----
 print("\n[2] Training loss trajectory")

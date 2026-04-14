@@ -14,6 +14,16 @@ Design note (run-2 redesign):
   diversity**, history goes from ~0.23 iters to ~1.8 iters. Vectorized
   in `sample()` by bucketing the batch by symmetry and rotating each
   bucket once.
+
+Phase 2 note (uint8 obs storage):
+  Every obs plane cell is exactly 0 or 1 (stones + color-to-play —
+  verified in _test_correctness.py). Storing them as uint8 instead of
+  float32 is a lossless 4× memory cut: the Phase 2 13x13 buffer at
+  1M samples drops from 12.2 GB → 3.6 GB, which is what makes it fit
+  under the 42.8 GB cgroup host alongside MCTS trees + compile cache.
+  The float cast happens in `Trainer.train_step` after the H2D copy,
+  so the uint8 bytes also cross PCIe instead of float32 — a free 4×
+  bandwidth win as a side-effect.
 """
 
 import os
@@ -96,7 +106,10 @@ class ReplayBuffer:
         N = board_size
         actions = N * N + 1
 
-        self.obs = np.zeros((capacity, input_planes, N, N), dtype=np.float32)
+        # obs is uint8 — every cell is 0/1 so float32 would waste 4×
+        # RAM (and 4× PCIe bandwidth per training step). Trainer casts
+        # to float32 after H2D copy.
+        self.obs = np.zeros((capacity, input_planes, N, N), dtype=np.uint8)
         self.policy = np.zeros((capacity, actions), dtype=np.float32)
         self.value = np.zeros(capacity, dtype=np.float32)
 
@@ -110,7 +123,9 @@ class ReplayBuffer:
         sample time so the buffer holds 8× more distinct positions.
         """
         idx = self.index % self.capacity
-        self.obs[idx] = obs
+        # Incoming obs is float32 from the C++ engine / Python self-play
+        # path. Values are strictly 0.0/1.0, so the uint8 cast is lossless.
+        self.obs[idx] = obs.astype(np.uint8, copy=False)
         self.policy[idx] = policy
         self.value[idx] = value
         self.index += 1
@@ -119,7 +134,7 @@ class ReplayBuffer:
     def _store(self, obs: np.ndarray, policy: np.ndarray, value: float):
         """Direct insert without symmetry. Used by tests + load_from."""
         idx = self.index % self.capacity
-        self.obs[idx] = obs
+        self.obs[idx] = obs.astype(np.uint8, copy=False)
         self.policy[idx] = policy
         self.value[idx] = value
         self.index += 1
@@ -188,12 +203,16 @@ class ReplayBuffer:
 
         Truncates the saved payload to this buffer's capacity if the
         saved buffer was larger. `index` is advanced to `size` so new
-        pushes continue to wrap circularly.
+        pushes continue to wrap circularly. Handles legacy float32
+        obs saves by casting to uint8 on load (values are always 0/1).
         """
         data = np.load(path)
         n = int(data["size"])
         n = min(n, self.capacity)
-        self.obs[:n] = data["obs"][:n]
+        saved_obs = data["obs"][:n]
+        if saved_obs.dtype != np.uint8:
+            saved_obs = saved_obs.astype(np.uint8, copy=False)
+        self.obs[:n] = saved_obs
         self.policy[:n] = data["policy"][:n]
         self.value[:n] = data["value"][:n]
         self.size = n

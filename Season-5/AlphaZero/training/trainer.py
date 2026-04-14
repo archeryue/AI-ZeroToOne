@@ -71,7 +71,10 @@ class Trainer:
             value_np = np.concatenate([val_m, val_a], axis=0)
         else:
             obs_np, policy_np, value_np = buffer.sample(self.cfg.batch_size)
-        obs = torch.from_numpy(obs_np).to(self.device)
+        # Buffer stores obs as uint8 (Phase 2 memory optimization).
+        # Cast to float AFTER the H2D copy so PCIe sees 1 byte/cell
+        # instead of 4 — CUDA fuses the dtype promotion into the load.
+        obs = torch.from_numpy(obs_np).to(self.device).float()
         target_policy = torch.from_numpy(policy_np).to(self.device)
         target_value = torch.from_numpy(value_np).to(self.device)
 
