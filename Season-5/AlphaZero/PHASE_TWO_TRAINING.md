@@ -882,3 +882,202 @@ Then resume with the same `--checkpoint
 checkpoints/13x13_run1/checkpoint_0000.pt` command as attempt 2.
 Iter 1 now runs under `resign_min_move=40`; if games land in the
 ~100–150 move range again, the fix worked.
+
+## Attempt 3 — resumed, ran 5 iters, catastrophic strength regression
+
+Attempt 3 resumed from `checkpoint_0000.pt` under the fix above. Iters
+0-4 all completed; memory behavior was healthy (peak ~43 GB cgroup,
+under the raised 50 GB ceiling). **But the first in-training
+`evaluate_vs_random` at iter 4 returned 5 %**, and a post-kill
+per-checkpoint audit showed the strength was **oscillating wildly**
+across every iter — the cleanest-ever diagnostic signal we've gotten
+on 13x13 training stability.
+
+## Problem 4 — value-head cannibalization
+
+### Symptom
+
+Post-kill checkpoint audit
+(`training/_eval_checkpoints.py`, 100 games × 100 sims/move vs random
+per checkpoint):
+
+| iter | win rate | total | policy | **value** | avg moves/game |
+|---:|---:|---:|---:|---:|---:|
+| 0 | **20.0 %** | 5.974 | 5.145 | **0.828** | 144 |
+| 1 | **2.0 %** ⚠️ | 5.956 | 5.045 | **0.911** | 41 |
+| 2 | **18.0 %** | 5.876 | 4.980 | **0.896** | 94 |
+| 3 | **0.0 %** ⚠️ | 5.811 | 4.891 | **0.921** | 154 |
+| 4 | **8.0 %** | 5.745 | 4.820 | **0.925** | 155 |
+
+Three signals, all pointing the same direction:
+
+1. **Strength oscillates wildly, not monotonically.** This is NOT the
+   Phase 1 run 1 fingerprint (which was a slow monotonic decline from
+   a working net). Here every iter is a crapshoot between "barely
+   viable" and "completely broken".
+
+2. **Policy loss drops monotonically** (5.145 → 4.820, -6.3 %), but
+   **value loss rises monotonically** (0.828 → 0.925, **+11.7 %**).
+   The trainer is making the policy head much better and the value
+   head much worse at the same time.
+
+3. **Win rate tracks value loss directly**: iters where v_loss ≈ 0.90
+   score ~20 %, iters where v_loss ≈ 0.92 score 0–5 %. A 0.02-0.03
+   change in value loss swings strength by 15–20 percentage points.
+
+### Root cause: equal-weight loss is ~80 % policy-driven
+
+The trainer uses `loss = policy_loss + value_loss` with equal weight.
+But the two losses have very different natural magnitudes:
+
+- **`policy_loss`**: cross-entropy over 170 actions. Uniform baseline
+  is `log(170) ≈ 5.14`. A cold net sits right there, a trained net
+  drops to ~4.5-4.8. **Magnitude ~5.**
+- **`value_loss`**: MSE of scalar values in [-1, 1]. A net predicting
+  0 on all positions gets ~1.0 MSE against ±1 targets. **Magnitude ~0.9.**
+
+At equal weight in the summed loss, the total is ~80 % policy-driven,
+so the gradient SGD sees is ~5× more policy signal than value signal.
+The value head is **under-trained** — every SGD step, policy weights
+move a lot and value weights barely move. Over 100 train steps per
+iter, the value head drifts randomly on whatever noisy value targets
+the self-play happened to produce, without ever actually **learning**
+them.
+
+The oscillation mechanism:
+
+```
+1. iter N self-play produces positions + value targets (from game outcomes)
+2. trainer runs 100 SGD steps; policy head improves, value head
+   wanders in random direction
+3. iter N+1 self-play uses the wandered value head; MCTS leaf
+   evaluations are noisy → MCTS picks worse moves → produces worse
+   games → value targets are from a different distribution than iter N
+4. trainer sees a value-target shift; value head wanders again,
+   possibly back toward iter N's state, possibly further
+5. repeat
+```
+
+This is a standard failure mode in Zero training. LeelaZero,
+Katago, and the original AlphaZero all weight value loss higher
+than policy loss (coefficients between 1.0 and 1.5 on some
+implementations, explicit L2 regularization in AlphaZero itself).
+
+### Why 9x9 worked but 13x13 doesn't
+
+Phase 1 9x9 run 2 used the same `loss = policy + value` recipe and
+trained fine end-to-end. Three reasons 13x13 is more sensitive:
+
+1. **Bigger net (15b vs 10b)** — more capacity to overfit noisy value
+   targets.
+2. **Longer games (~150 vs ~85 moves)** — more positions where the
+   game outcome is still ambiguous, so value labels are noisier.
+3. **Larger board** — value evaluation is inherently harder because
+   territorial accounting scales roughly with board area.
+
+So a recipe that worked on a "forgiving" small-game/small-net setup
+collapses on a harder problem.
+
+### Fix: `value_loss_weight = 2.0` for 13x13
+
+New knob on `TrainingConfig`:
+
+```python
+# model/config.py
+@dataclass
+class TrainingConfig:
+    ...
+    value_loss_weight: float = 1.0   # default preserves 9x9 behavior
+
+# 13x13 preset override:
+value_loss_weight=2.0,
+```
+
+Trainer uses it:
+
+```python
+# trainer.py train_step
+loss = policy_loss + self.cfg.value_loss_weight * value_loss
+```
+
+**Why 2.0?** At that coefficient, value's contribution to the total
+is `2.0 × 0.9 = 1.8` vs policy's `5.0`, so policy:value split is
+~73 : 27 (vs the old 85 : 15). That's still policy-dominated, but the
+value head gets ~2× the gradient signal it was getting, enough to
+actually learn the targets.
+
+Not going higher (to e.g. 3.0) because:
+- AlphaZero's own published weight is closer to 1.0; 2.0 is already
+  a meaningful deviation from the canonical recipe.
+- Over-weighting value could swing the problem the other way (policy
+  head cannibalization).
+- If 2.0 still oscillates, the next lever is `train_steps_per_iter`
+  or `lr_init`, tested independently.
+
+Also enabling `eval_interval=1` on the 13x13 preset for the initial
+run2 so we see iter-by-iter strength and can catch any regression on
+iter 1 instead of waiting until iter 4. Once the strength curve is
+confirmed healthy, revert to a cheaper eval cadence (5-ish).
+
+### Smoke-test verification (2b×32ch tiny model)
+
+```
+Iter 0 | Train: loss=6.9982 (pi=5.1543, v=0.9220) | Eval: 75%
+Iter 1 | Train: loss=6.4426 (pi=5.0921, v=0.6753) | Eval: 60%
+Iter 2 | Train: loss=6.3165 (pi=5.0439, v=0.6363) | Eval: 60%
+```
+
+Arithmetic check: `5.1543 + 2.0 × 0.9220 = 6.9983` ≈ observed 6.9982
+(rounding) → **value_loss_weight is active**.
+
+Observations:
+- **Value loss drops monotonically** (0.922 → 0.675 → 0.636), reversing
+  the failing run1 trend.
+- **Policy loss also drops** (5.154 → 5.092 → 5.044), so we're not
+  cannibalizing policy to help value.
+- **Eval fires every iter** (eval_interval=1 works).
+- Eval win rate is noisy on 20 games + tiny model but **no strength
+  crash** from any iter to the next (75 → 60 → 60, not 75 → 2 → 60).
+
+Full 15b×128ch run2 is the real test.
+
+### What gets thrown away from run1
+
+run1's iter 1-4 data is contaminated and its weights are broken.
+Starting **run2 from scratch** (new `checkpoints/13x13_run2/` dir, no
+`--checkpoint`, no buffer reload). `checkpoint_0000.pt` is also not
+reusable because it was saved AFTER 100 train steps with the
+unweighted loss — its value head is already biased.
+
+The full per-iter run1 checkpoints and the strength_audit.txt stay
+on disk for post-mortem. PHASE_TWO_TRAINING.md's Problem 4 section
+(this one) is the write-up.
+
+---
+
+## Starting run2 — fresh, value_loss_weight=2.0
+
+Commands for a clean launch with the new config:
+
+```bash
+mkdir -p logs checkpoints/13x13_run2
+nohup PYTHONPATH=engine python -m training.train \
+    --board-size 13 \
+    --iterations 60 \
+    --output-dir checkpoints/13x13_run2 \
+    > logs/13x13_run2.log 2>&1 &
+```
+
+**What to watch in iters 0-5 of run2:**
+
+- `value_loss` should drop monotonically (or at worst stay flat)
+  across iters. If it rises, the fix is insufficient.
+- `eval_vs_random` win rate should climb monotonically from the cold
+  baseline (~20 % on 13x13 cold). iter 1 should be ≥ iter 0, not
+  catastrophically lower.
+- `avg moves/game` should stay in the 100-160 range. Values below
+  80 indicate pass-loop or value-collapse from the old bug.
+- `cgroup memory` should plateau around ~40-44 GB (same as run1).
+
+If all four look healthy through iter 5, the 60-iter run is expected
+to complete in ~35-40 hours.

@@ -53,6 +53,12 @@ class TrainingConfig:
     lr_final: float = 0.0001
     momentum: float = 0.9
     weight_decay: float = 1e-4
+    # Value-loss weight in total loss. Default 1.0 preserves Phase 1
+    # 9x9 behavior; 13x13 preset raises it to counter value-head
+    # cannibalization where policy_loss (~5) dominates value_loss
+    # (~0.9), leaving the value head under-trained — see
+    # PHASE_TWO_TRAINING.md Problem 4.
+    value_loss_weight: float = 1.0
 
     # Checkpointing
     checkpoint_interval: int = 10  # iterations between checkpoints
@@ -137,14 +143,27 @@ CONFIGS = {
             # the 9x9 run 2 fix used (20/85 ≈ 23%). Credible-child
             # cross-check stays on as the second line of defense.
             resign_min_move=40,
+            # Raised from the 1.0 default after run1 iter 0-4 eval_vs_random
+            # showed a value-head cannibalization pattern: strength
+            # oscillating 20→2→18→0→8 % while policy_loss monotonically
+            # dropped and value_loss monotonically rose. At equal weight,
+            # total_loss ≈ policy(~5) + value(~0.9) is 80 % policy-driven,
+            # so the value head sees ~5x less gradient than policy and
+            # drifts on noisy self-play value targets. 2.0 roughly
+            # balances the two heads' gradient contributions. See
+            # PHASE_TWO_TRAINING.md Problem 4.
+            value_loss_weight=2.0,
+            # Eval every iter instead of every 5 iters for run2's first
+            # few iters — we need iter-by-iter strength visibility to
+            # confirm the fix actually works. Can revert to 5 once the
+            # strength curve is confirmed monotonically improving.
+            eval_interval=1,
             # Per-iter checkpoints are mandatory for Phase 2 post-hoc
             # Bradley-Terry tournaments — Phase 1 proved you cannot
             # reconstruct weight-drift trajectories from sparse
             # snapshots. 60 iters × ~36 MB ≈ 2.2 GB, trivial.
             checkpoint_interval=1,
-            # Tight eval cadence so BN drift / strength regressions
-            # get caught within a few iters instead of waiting 10.
-            eval_interval=5,
+            # (eval_interval=1 is set above for run2 visibility)
         ),
     ),
     19: (

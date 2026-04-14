@@ -88,7 +88,13 @@ class Trainer:
             # Value loss: MSE
             value_loss = F.mse_loss(value, target_value)
 
-            loss = policy_loss + value_loss
+            # Weighted total. policy_loss magnitude (~5, cross-entropy
+            # over 170 actions) dominates value_loss magnitude (~0.9,
+            # MSE over ±1) at equal weights, leaving the value head
+            # under-trained. Phase 2 13x13 raises value_loss_weight
+            # from 1.0 → 2.0 to rebalance — see PHASE_TWO_TRAINING.md
+            # Problem 4 for the diagnosis.
+            loss = policy_loss + self.cfg.value_loss_weight * value_loss
 
         # NaN / Inf guard — skip the step entirely rather than poisoning
         # the weights. Returns the current (unchanged) values so the
