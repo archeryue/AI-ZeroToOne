@@ -1,0 +1,8 @@
+Checkpoint strength audit for checkpoints/13x13_run1
+num_games=100, sims_per_move=100
+
+iter 0: 20.0% (422.1s)
+iter 1: 2.0% (286.4s)
+iter 2: 18.0% (315.3s)
+iter 3: 0.0% (303.4s)
+iter 4: 8.0% (300.2s)
