@@ -205,6 +205,14 @@ class ParallelSelfPlay:
         black_wins = 0
         ticks = 0
         t_start = time.time()
+        # Intra-iter progress: print a one-liner every PROGRESS_INTERVAL
+        # seconds so the user can see iter 0 is alive and making progress
+        # without having to wait ~40 min for the Iter summary line. The
+        # print is cheap (once per 30s across ~65000 ticks). Set
+        # AZ_PROGRESS_INTERVAL env var to override or "0" to silence.
+        PROGRESS_INTERVAL = float(
+            os.environ.get("AZ_PROGRESS_INTERVAL", "30"))
+        last_progress_t = t_start
 
         try:
             while total_games < target_games:
@@ -285,6 +293,33 @@ class ParallelSelfPlay:
                 # Signal workers to process results
                 self.process_barrier.wait()
                 ticks += 1
+
+                # Throttled progress print. Cheap — a Python branch + a
+                # time.time() call per tick, the actual print only fires
+                # every PROGRESS_INTERVAL seconds.
+                if PROGRESS_INTERVAL > 0:
+                    now = time.time()
+                    if now - last_progress_t >= PROGRESS_INTERVAL:
+                        elapsed = now - t_start
+                        tps = ticks / max(elapsed, 1e-3)
+                        frac = total_games / max(target_games, 1)
+                        if frac > 0.01:
+                            eta_s = elapsed / frac - elapsed
+                            eta_str = f"{eta_s/60:.1f}m"
+                        else:
+                            eta_str = "?"
+                        max_tree = max(
+                            (w.max_tree_nodes() for w in self.workers),
+                            default=0)
+                        print(
+                            f"         | sp: {total_games}/{target_games} "
+                            f"games ({frac*100:.0f}%), buf={len(buffer)}, "
+                            f"ticks={ticks} ({tps:.1f}/s), "
+                            f"max_tree={max_tree/1000:.0f}k, "
+                            f"elapsed={elapsed/60:.1f}m, eta={eta_str}",
+                            flush=True,
+                        )
+                        last_progress_t = now
 
         finally:
             # Stop workers
