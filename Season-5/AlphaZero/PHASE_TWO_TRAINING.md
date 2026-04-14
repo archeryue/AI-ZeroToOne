@@ -749,3 +749,136 @@ config.
 relaunching. The user asked me to stop on anything uncertain, and
 this is exactly that. Iter 0 is safe, run1 dir is clean. Waiting for
 their decision.
+
+### Resolution: raise operational ceiling 35 GB → 48 GB
+
+The user came back, rejected the "sacrifice AI quality" options and
+asked for a real memory-limit audit. Results:
+
+```
+memory.limit_in_bytes    = 61.99 GB   ← real cgroup hard cap
+memory.memsw.limit       = 61.99 GB   (no swap)
+memory.kmem.limit        = unlimited
+oom_kill_disable         = 1          ← processes freeze, don't crash
+host MemTotal            = 528 GB     (container is tiny vs host)
+```
+
+The 35 GB target was a self-imposed soft limit, not a real constraint.
+The **real** wedge point is 62 GB, and `oom_kill_disable=1` means
+crossing it freezes the process rather than SIGKILL'ing it — so we'd
+see the failure in monitoring (tick rate drops to 0) before any
+unrecoverable damage.
+
+**Decision: raise operational ceiling 35 GB → 48 GB.** That's:
+- Covers all observed peaks (attempt 1 peaked at 35.02) with ~13 GB
+  slack
+- Still 14 GB of hard-limit headroom below 62 GB
+- Zero code changes, zero AI quality cost, zero speed cost
+
+No config tuning, no monitoring rewrite — just a corrected threshold
+that matches the actual container envelope.
+
+## Attempt 2 — resumed with 48 GB ceiling, aborted on early-resign
+
+### Run startup (2026-04-14 ~11:59 UTC)
+
+Launched via `--checkpoint checkpoints/13x13_run1/checkpoint_0000.pt`.
+Autotune was **~8× faster** than a cold launch (torch.compile
+artifacts cached from attempt 1 persisted in `/tmp`): self-play
+started by T+0.5 min instead of T+4 min.
+
+`train.py` resume messages landed as expected:
+
+```
+Resumed from iteration 0
+Restored replay buffer: 294816 samples from checkpoints/13x13_run1/latest_buffer.npz
+```
+
+Iter 1 self-play ran comfortably under 30 GB cgroup — the 48 GB
+ceiling was correct.
+
+## Problem 3 — early-resign data bias (iter 1)
+
+### Symptom
+
+Iter 1 completed in **12.6 min** vs iter 0's **40.5 min** (3.2× faster)
+and showed a counter-intuitive training signal:
+
+```
+Iter    1 | Self-play: 2052 games, 84841 pos (41 avg moves), 2.7 games/s, buf=379657, 753.0s
+         | Train: loss=5.9476 (pi=5.0447, v=0.9029), lr=0.004997, 2.5s
+```
+
+| metric | iter 0 | iter 1 | Δ |
+|---|---:|---:|---:|
+| self-play time | 2426 s | 753 s | ×3.2 faster |
+| avg moves / game | 144 | **41** | **×3.5 shorter** |
+| games / sec | 0.84 | 2.70 | — |
+| total loss | 5.974 | 5.948 | −0.026 |
+| policy loss | 5.145 | 5.045 | −0.100 ✓ |
+| **value loss** | **0.828** | **0.903** | **+0.075 ⚠️** |
+
+**Value loss going UP while policy loss goes down is the exact
+fingerprint of the iter-4→19 regression on 9x9 run 1** — the trainer
+is fitting on positions whose value labels got flipped by early
+resign, so the value head learns noise while the policy head is
+still learning signal from visit distributions.
+
+### Root cause
+
+On a fresh 15b×128ch net at iter 0, value outputs are near zero and
+resign never fires. After 100 training steps on 307k cold
+self-play positions, the value head has moved just enough for some
+positions to hit the `-0.90` threshold for 5 consecutive moves —
+early, at move ~25 (just above `resign_min_move=20`), and
+aggressively, because the credible-child cross-check requires a
+child with Q > `-0.90` **and** ≥ 5 % of root visits. Early in
+training, the policy is still nearly-uniform so visits spread across
+many children and no single child gets 5 % + a non-losing Q. The
+cross-check fires less often than intended on cold-ish nets.
+
+**Effect on training data:** games cut off at move ~25-40. The
+replay buffer fills with early-game positions where the "true"
+value is ambiguous, and the labels come from the resign decision
+itself rather than from played-out games. Feedback loop:
+
+```
+early resign → short games → middle/endgame positions absent →
+value head trained on biased early-game labels →
+value head overconfident early → more resigns fire earlier →
+repeat
+```
+
+This is textbook what `PHASE_ONE_TRAINING.md` Problem 3 describes.
+
+### Fix
+
+`model/config.py` 13x13 preset: **`resign_min_move=20 → 40`**
+(override; default in `TrainingConfig` stays at 20 for 9x9 use).
+
+- 40 is 27 % of a typical 150-move 13x13 game, matching the 23 %
+  ratio (20 / 85) that worked on 9x9 run 2.
+- The hard move floor can't be side-stepped by the credible-child
+  check; it always blocks resign regardless of value confidence.
+- No code change, no rebuild, no AI quality loss. Config knob only.
+- Credible-child cross-check stays on as the second line of
+  defense once move 40 is passed.
+
+### Revert + resume plan
+
+Iter 1's `checkpoint_0001.pt` was trained on biased data; carrying
+it forward risks cementing the value-head confusion. Reverting run1
+state to the iter 0 baseline:
+
+- **delete** `checkpoint_0001.pt` (poisoned)
+- **trim** `latest_buffer.npz` from 379,657 → 294,816 positions
+  (iter 0's size, iter 1 entries at indices 294816+ simply
+  truncated — circular buffer invariants preserved, `size=index=294816`)
+- **truncate** `training_log.jsonl` to just the iter 0 line
+- **keep** `checkpoint_0000.pt` — that's the pre-bias weights we
+  resume from
+
+Then resume with the same `--checkpoint
+checkpoints/13x13_run1/checkpoint_0000.pt` command as attempt 2.
+Iter 1 now runs under `resign_min_move=40`; if games land in the
+~100–150 move range again, the fix worked.

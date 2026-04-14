@@ -129,6 +129,14 @@ CONFIGS = {
             # iter-4→19 regression; run 2 at 0.005 was stable. Cheap
             # insurance on a bigger net (15b vs 10b) and a bigger game.
             lr_init=0.005,
+            # Raised from the 20 default after run1 iter 1 saw games
+            # collapse to 41 avg moves (vs iter 0's 144) and value loss
+            # rise 0.83 → 0.90 — classic early-resign data bias. On a
+            # 13x13 game with max_game_moves=250, a move floor of 40 is
+            # ~27% of a typical 150-move game, matching the proportion
+            # the 9x9 run 2 fix used (20/85 ≈ 23%). Credible-child
+            # cross-check stays on as the second line of defense.
+            resign_min_move=40,
             # Per-iter checkpoints are mandatory for Phase 2 post-hoc
             # Bradley-Terry tournaments — Phase 1 proved you cannot
             # reconstruct weight-drift trajectories from sparse
