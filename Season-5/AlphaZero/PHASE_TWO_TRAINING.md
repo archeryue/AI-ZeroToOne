@@ -1081,3 +1081,108 @@ nohup PYTHONPATH=engine python -m training.train \
 
 If all four look healthy through iter 5, the 60-iter run is expected
 to complete in ~35-40 hours.
+
+### Run 2 results — fix is partial, not sufficient
+
+Launched 2026-04-14 ~15:02 UTC, aborted after iter 1 completed
+(~T+1:17). Memory behavior was perfect — **plateau ~38-40 GB**,
+never crossed 41.4 during self-play, far under the 50 GB abort line.
+Problem 2 (memory) and Problem 3 (early resign) are both fully fixed.
+
+**But iter 1 showed the same value-head drift pattern as run1**,
+just at smaller magnitude:
+
+| metric | iter 0 | iter 1 | Δ | run1 Δ for comparison |
+|---|---:|---:|---:|---:|
+| avg moves/game | 153 | 86 | −67 | −103 (144→41) |
+| policy_loss | 5.1346 | 5.0516 | −0.083 ✓ | −0.100 |
+| **value_loss** | **0.8723** | **0.9207** | **+0.048 ⚠️** | **+0.083 ⚠️** |
+| self-play time | 2552 s | 1202 s | shorter games → faster iter | — |
+| eval win rate | 1.0 % | 0.0 % | −1 pp | −18 pp (20→2) |
+| cgroup peak | ~37 GB | ~40 GB | normal | normal |
+
+**`value_loss_weight=2.0` dampened the drift by ~40 %** (+0.048 vs
+run1's +0.083) but **did not reverse the direction**. The value head
+is still moving away from truth during iter 0→1 training, just more
+slowly. The policy→value cannibalization hypothesis is **partially
+validated**: a 2× weight helps, but not enough.
+
+**Secondary weird data point:** run2's iter 0 eval was **1 % vs run1's
+20 %** under identical-ish conditions. Both runs used random weights
+(no torch manual_seed), and the random-player evaluator uses
+unseeded `np.random`, so some of the 19 pp gap is attributable to
+eval variance. But 6σ of binomial variance is implausible — part of
+it has to be real. Most likely explanations:
+
+1. The 2.0 weighting pushed the first-iter trained weights further
+   from the cold init in a worse direction (the value head "trained
+   harder" on the noisy cold-self-play targets).
+2. Different random initial weights between the two runs.
+
+Either way, run2's absolute strength is worse than run1's at iter 0,
+and the iter 0 → iter 1 drift pattern is the same direction.
+
+### Aborting run2
+
+Aborted mid-iter-2 to stop wasting compute. Preserved:
+
+- `checkpoints/13x13_run2/checkpoint_0000.pt` (after iter 0)
+- `checkpoints/13x13_run2/checkpoint_0001.pt` (after iter 1, the
+  regressed state)
+- `checkpoints/13x13_run2/latest_buffer.npz` (1.74 GB, iter 1 end)
+- `checkpoints/13x13_run2/training_log.jsonl` (iters 0-1)
+- `logs/13x13_run2.log` (full stdout)
+
+Nothing committed to git except the `value_loss_weight=2.0`
+parameter change itself (which stays — it was still directionally
+correct, just insufficient).
+
+### What we learned from run1 + run2 combined
+
+The **oscillating-value-head** problem on 13x13 is deeper than a
+single loss-weight coefficient. Key observations across both runs:
+
+1. **Policy head trains fine.** Loss drops monotonically,
+   gradient magnitude is healthy.
+2. **Value head is unstable with the current recipe.** It drifts in
+   a DIRECTION that makes strength worse, and oscillates across
+   iters as MCTS data shifts under it.
+3. **Weight rebalancing helps but doesn't cure.** 2.0 was less
+   drift than 1.0, but still positive drift.
+4. **The instability is not the early-resign loop** — run2 with
+   `resign_min_move=40` still drifted, and the drift is visible
+   from iter 0 → iter 1 when self-play was perfectly normal
+   (153-move games on iter 0).
+
+The problem is **inherent to training on cold-self-play value
+targets with a 15b×128ch network at this batch size**. The value
+labels from cold-net games are noisy enough that any amount of SGD
+on them pushes the value head in a net-wrong direction. The
+oscillation happens because iter N+1's self-play produces a
+different noise distribution, so the drift direction changes each
+iter, but the magnitude stays.
+
+Several hypotheses for what would actually fix it, none validated
+on real data yet — these are the menu for tomorrow:
+
+- **Reduce `train_steps_per_iter` aggressively** (100 → 10 or 20).
+  Give the buffer time to accumulate diverse data before training
+  any significant amount. The very early iters have almost pure
+  cold-net data; training a lot on that data is what hurts.
+- **Use a warmup schedule for the value loss weight**: start
+  `value_loss_weight=0.5`, ramp to 2.0 over 5 iters. Lets the
+  policy learn first, then gradually turn on value training.
+- **Lower `lr_init` another 2-4×** (0.005 → 0.002 or 0.001). Cuts
+  per-step magnitude; over 100 steps this is equivalent to
+  reducing `train_steps_per_iter`.
+- **Different value loss function**: Huber instead of MSE.
+  Reduces impact of outlier value targets from early self-play.
+- **Batch normalization audit**: the running stats might be
+  specializing to iter N's distribution. Could try setting
+  `track_running_stats=False` or moving to GroupNorm / LayerNorm.
+- **Explicit torch seed** to make runs reproducible, so we can
+  actually compare apples to apples.
+
+See `PHASE_TWO_HANDOVER.md` for the next-session plan.
+
+---
