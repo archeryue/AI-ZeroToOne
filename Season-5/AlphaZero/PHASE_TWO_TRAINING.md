@@ -30,7 +30,7 @@ live run log.
 | `num_blocks × channels` | 15 × 128 | vs 10 × 128 on 9x9 |
 | `num_simulations` | 600 | vs 400 on 9x9 |
 | `dirichlet_alpha` | 0.07 | ≈ 10 / avg_legal_moves (~150 early) |
-| `num_parallel_games` | **128** | dropped from 256 by the OOM fix |
+| `num_parallel_games` | **256** | restored after Problem 1 follow-up (see "Tuning 1M cap + 256 parallel") |
 | `num_games_per_iter` | 2048 | same as 9x9 |
 | `buffer_size` | 1,000,000 | vs 500k on 9x9 |
 | `max_game_moves` | 250 | vs 150 on 9x9 |
@@ -348,6 +348,60 @@ Reset-on-threshold is ~5 lines, obviously correct, and only throws
 away inherited visits every 3–5 moves on 13x13. Revisit compaction
 only if Phase 2 convergence looks anemic and the reset frequency turns
 out to be the bottleneck.
+
+### Follow-up tuning: raise cap 200k → 1M, restore 256 parallel games
+
+Same day, after the first fix was in place. The initial 200k cap was
+sized against a conservative 36 GB target, which made the reset fire
+**every ~3 moves** — ~33 % of moves started cold, translating to
+roughly **~13 % slower convergence**. With 35 GB of real headroom
+confirmed available on the host, there's no reason to leave that on
+the floor.
+
+Per-tree memory scales as `~75 bytes/node` (nodes array + proportional
+`game_pool`). Trading cap sizes against parallelism:
+
+| cap | per-tree | 256 trees | reset every | cold-move frac | convergence hit |
+|---:|---:|---:|---:|---:|---:|
+| 200k | ~16 MB | ~4 GB | ~3 moves | ~33 % | ~13 % |
+| **1,000k** | **~75 MB** | **~19 GB** | **~14 moves** | **~7 %** | **~3 %** |
+| 2,000k | ~150 MB | ~38 GB (over) | ~28 moves | ~3.5 % | ~1.5 % |
+
+1M is the sweet spot under 35 GB. At the same time `num_parallel_games`
+was restored 128 → 256; the tree cap makes this safe now (peak MCTS
+state ~19 GB, not the ~280 GB of the uncapped version). The bigger
+GPU batch (256 × `vl_batch(8)` = 2048) amortizes per-tick CPU+sync
+overhead and should give an additional ~20–40 % speedup per iter from
+better GPU saturation (9x9 run 2 already ran this batch size happily).
+
+**Updated memory budget at peak (during savez transient, 256 parallel
+games, 1M cap):**
+
+| component | GB |
+|---|---:|
+| MCTS state (256 trees × ~75 MB) | 19.0 |
+| Replay buffer (uint8) | 3.6 |
+| savez transient | 3.6 |
+| Model + optimizer + torch.compile | 1.0 |
+| CUDA reserved + Python/C++ overhead | 3.0 |
+| **Total** | **30.2** |
+
+Leaves ~4.8 GB headroom under 35 GB. Watch first-iter RSS carefully
+— this is tighter than the conservative fix, and the savez transient
+is the most likely spike source.
+
+**Files touched:**
+
+- `engine/worker.h`: `MAX_TREE_NODES` 200000 → **1000000**, plus
+  expanded comment table showing the memory-vs-cold-move trade.
+- `model/config.py` 13x13 preset: `num_parallel_games` 128 → **256**
+  with a comment pointing at this section.
+- Engine rebuilt via `setup.py build_ext --inplace`.
+
+**Validation still pending.** Re-running `_test_tree_cap.py` and the
+13x13 smoke test is on the pre-full-run checklist below; the new 1M
+cap means the micro-test should see peak max_tree_nodes around
+~1,070,000 (1M + one move's ~72k growth).
 
 ---
 

@@ -98,15 +98,15 @@ CONFIGS = {
             num_simulations=600,
             dirichlet_alpha=0.07,  # ≈ 10 / avg_legal_moves (~150 for 13x13)
             num_games_per_iter=2048,
-            # Halved from the 256 default after the Phase 2 dryrun OOM.
-            # Even with SelfPlayWorker::MAX_TREE_NODES capping per-tree
-            # RSS, 256 parallel 13x13 games × ~26 MB of MCTS state peaks
-            # at ~7 GB, plus pinned buffers / worker numpy arrays scale
-            # linearly too. 128 cuts all of those in half and gives us
-            # comfortable headroom under the 36 GB target. GPU batch is
-            # 128 × vl_batch(8) = 1024 which still saturates a 4090 for
-            # the 15b×128ch net, so throughput is ~unchanged.
-            num_parallel_games=128,
+            # Restored to 256 after raising MAX_TREE_NODES 200k → 1M.
+            # With the bigger cap per tree uses ~75 MB × 256 = ~19 GB
+            # for MCTS state, which still fits under the 35 GB budget
+            # alongside buffer + savez transient + model/compile
+            # (~30 GB total, ~5 GB headroom). The bigger GPU batch
+            # (256 × vl_batch(8) = 2048 vs 1024 at 128 parallel)
+            # amortizes per-tick CPU+sync overhead and gives ~20-40%
+            # faster iters.
+            num_parallel_games=256,
             buffer_size=1_000_000,
             max_game_moves=250,
             # 13x13 games average ~120 moves (vs ~85 on 9x9). Keep

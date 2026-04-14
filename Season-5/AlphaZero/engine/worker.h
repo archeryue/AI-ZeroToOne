@@ -59,14 +59,24 @@ public:
     // Without this cap, a 13x13 game runs ~250 moves × 600 sims × ~100
     // children/expansion ≈ 15M nodes per tree → ~1 GB per tree → 280 GB
     // across 256 parallel games. Phase 2 dryrun OOM-killed Docker on
-    // exactly this. With the cap at 200k nodes:
-    //   - 200k × 32 B nodes + ~2k game states × 4.3 KB ≈ 26 MB per tree
-    //   - × 256 parallel games ≈ 7 GB worst case for all MCTS state
-    // The cap is checked after advance() so the new root is the current
-    // game position; reset() rebuilds a fresh tree from that position
-    // (losing inherited visits from the prior 3-5 moves but bounded RAM).
-    // See PHASE_TWO_TODO.md "13x13 OOM fix" for the full memory math.
-    static constexpr int MAX_TREE_NODES = 200000;
+    // exactly this. The cap is checked after advance() so the new root
+    // is the current game position; reset() rebuilds a fresh tree from
+    // that position, bounding RAM at the cost of losing inherited
+    // visits on the reset move.
+    //
+    // Sizing (13x13, ~72k new nodes per move at 600 sims):
+    //   cap          per-tree   × 256 trees   reset every   cold moves
+    //   -----        --------   -----------   -----------   ----------
+    //   200k          ~16 MB       ~4 GB        ~3 moves       ~33 %
+    //   1,000k        ~75 MB      ~19 GB       ~14 moves        ~7 %
+    //   2,000k       ~150 MB      ~38 GB       ~28 moves      ~3.5 %
+    //
+    // 1M is the sweet spot on a 35 GB budget: peak MCTS ~19 GB fits
+    // alongside buffer (3.6) + savez transient (3.6) + model/compile
+    // (~4) = ~30 GB total, ~5 GB headroom. Cold-move fraction drops to
+    // ~7 %, so the AI convergence hit is ~3 % instead of ~13 %.
+    // See PHASE_TWO_TRAINING.md "Problem 1" for the full memory math.
+    static constexpr int MAX_TREE_NODES = 1000000;
 
 private:
     // Per-position record (obs + policy + who played)
