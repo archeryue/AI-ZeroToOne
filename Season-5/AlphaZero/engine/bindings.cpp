@@ -251,6 +251,12 @@ void bind_worker(py::module_& m, const char* name) {
         .def_property_readonly("active_count", &W::active_count)
         .def_property_readonly("games_done", &W::games_done)
         .def_property_readonly("completed_count", &W::completed_count)
+
+        // Diagnostic: max tree-node count across all game slots. Used by
+        // the tree-cap test to verify MAX_TREE_NODES is honored.
+        .def("max_tree_nodes", &W::max_tree_nodes)
+        .def_property_readonly_static("MAX_TREE_NODES",
+            [](py::object) { return (int)W::MAX_TREE_NODES; })
         ;
 }
 

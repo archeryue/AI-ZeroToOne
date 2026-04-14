@@ -96,7 +96,13 @@ public:
         : c_puct(c_puct_), dirichlet_alpha(dir_alpha),
           dirichlet_epsilon(dir_eps), root_noise_applied(false)
     {
-        nodes.reserve(65536);
+        // Reserve a modest baseline. The per-game upper bound is enforced
+        // by SelfPlayWorker::MAX_TREE_NODES (200k), which triggers a
+        // reset mid-game when the tree gets too big. A bigger reserve
+        // just wastes RAM across 256 parallel trees — 131072 × 32 B ×
+        // 256 = 1 GB of untouched capacity, which contributed to the
+        // Phase 2 dryrun OOM.
+        nodes.reserve(16384);
 
 
         root_idx = alloc_node();
@@ -452,7 +458,13 @@ public:
     void reset(const go::Game<N>& game) {
         nodes.clear();
         game_pool.clear();
-        nodes.reserve(65536);
+        // Reserve a modest baseline. The per-game upper bound is enforced
+        // by SelfPlayWorker::MAX_TREE_NODES (200k), which triggers a
+        // reset mid-game when the tree gets too big. A bigger reserve
+        // just wastes RAM across 256 parallel trees — 131072 × 32 B ×
+        // 256 = 1 GB of untouched capacity, which contributed to the
+        // Phase 2 dryrun OOM.
+        nodes.reserve(16384);
 
 
         root_idx = alloc_node();

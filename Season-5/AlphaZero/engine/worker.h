@@ -54,6 +54,20 @@ public:
     static constexpr int OBS_SIZE = OBS_PLANES * CELLS;
     static constexpr int MAX_VL = 16;
 
+    // Hard cap on per-game MCTSTree size, enforced after each move.
+    // MCTSTree::advance() only re-roots; it never frees orphaned subtrees.
+    // Without this cap, a 13x13 game runs ~250 moves × 600 sims × ~100
+    // children/expansion ≈ 15M nodes per tree → ~1 GB per tree → 280 GB
+    // across 256 parallel games. Phase 2 dryrun OOM-killed Docker on
+    // exactly this. With the cap at 200k nodes:
+    //   - 200k × 32 B nodes + ~2k game states × 4.3 KB ≈ 26 MB per tree
+    //   - × 256 parallel games ≈ 7 GB worst case for all MCTS state
+    // The cap is checked after advance() so the new root is the current
+    // game position; reset() rebuilds a fresh tree from that position
+    // (losing inherited visits from the prior 3-5 moves but bounded RAM).
+    // See PHASE_TWO_TODO.md "13x13 OOM fix" for the full memory math.
+    static constexpr int MAX_TREE_NODES = 200000;
+
 private:
     // Per-position record (obs + policy + who played)
     struct MoveRecord {
@@ -183,6 +197,19 @@ private:
         // Play move
         s.game.make_move(action);
         s.tree->advance(action);
+
+        // Bound per-game MCTS memory. advance() only re-roots — orphaned
+        // subtrees stay allocated in the nodes vector and game_pool deque
+        // for the entire game, which is what blew up the Phase 2 13x13
+        // dryrun. If the persistent tree has grown past MAX_TREE_NODES,
+        // throw it away and rebuild from the current game state. The
+        // first move after a reset starts cold (no inherited visits) but
+        // still gets the full num_sims budget, so quality only marginally
+        // degrades while RSS stays bounded.
+        if (s.tree->num_nodes() > MAX_TREE_NODES) {
+            s.tree->reset(s.game);
+        }
+
         s.sims_done = 0;
         s.move_num++;
 
@@ -273,6 +300,18 @@ public:
         int c = 0;
         for (const auto& s : slots_) if (s.active) c++;
         return c;
+    }
+
+    // Max tree-node count across all game slots (diagnostic).
+    int max_tree_nodes() const {
+        int m = 0;
+        for (const auto& s : slots_) {
+            if (s.tree) {
+                int n = s.tree->num_nodes();
+                if (n > m) m = n;
+            }
+        }
+        return m;
     }
 
     // Move completed training data out. Returns (obs, policy, value, count).

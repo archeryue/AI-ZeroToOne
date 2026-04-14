@@ -98,6 +98,15 @@ CONFIGS = {
             num_simulations=600,
             dirichlet_alpha=0.07,  # ≈ 10 / avg_legal_moves (~150 for 13x13)
             num_games_per_iter=2048,
+            # Halved from the 256 default after the Phase 2 dryrun OOM.
+            # Even with SelfPlayWorker::MAX_TREE_NODES capping per-tree
+            # RSS, 256 parallel 13x13 games × ~26 MB of MCTS state peaks
+            # at ~7 GB, plus pinned buffers / worker numpy arrays scale
+            # linearly too. 128 cuts all of those in half and gives us
+            # comfortable headroom under the 36 GB target. GPU batch is
+            # 128 × vl_batch(8) = 1024 which still saturates a 4090 for
+            # the 15b×128ch net, so throughput is ~unchanged.
+            num_parallel_games=128,
             buffer_size=1_000_000,
             max_game_moves=250,
             # 13x13 games average ~120 moves (vs ~85 on 9x9). Keep
@@ -107,6 +116,19 @@ CONFIGS = {
             # the training targets instead of collapsing to argmax.
             temperature_moves=40,
             temperature_low=0.25,
+            # Halved from the 0.01 default to match the 9x9 run 2
+            # fix for BN drift. Run 1 used 0.01 and exhibited the
+            # iter-4→19 regression; run 2 at 0.005 was stable. Cheap
+            # insurance on a bigger net (15b vs 10b) and a bigger game.
+            lr_init=0.005,
+            # Per-iter checkpoints are mandatory for Phase 2 post-hoc
+            # Bradley-Terry tournaments — Phase 1 proved you cannot
+            # reconstruct weight-drift trajectories from sparse
+            # snapshots. 60 iters × ~36 MB ≈ 2.2 GB, trivial.
+            checkpoint_interval=1,
+            # Tight eval cadence so BN drift / strength regressions
+            # get caught within a few iters instead of waiting 10.
+            eval_interval=5,
         ),
     ),
     19: (
