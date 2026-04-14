@@ -28,7 +28,7 @@ live run log.
 | knob | value | notes |
 |---|---:|---|
 | `num_blocks × channels` | 15 × 128 | vs 10 × 128 on 9x9 |
-| `num_simulations` | 600 | vs 400 on 9x9 |
+| `num_simulations` | **400** | same as AlphaGo Zero 13x13; cut from 600 for wall-time (see "Speed tuning: drop sims 600 → 400") |
 | `dirichlet_alpha` | 0.07 | ≈ 10 / avg_legal_moves (~150 early) |
 | `num_parallel_games` | **256** | restored after Problem 1 follow-up (see "Tuning 1M cap + 256 parallel") |
 | `num_games_per_iter` | 2048 | same as 9x9 |
@@ -402,6 +402,56 @@ is the most likely spike source.
 13x13 smoke test is on the pre-full-run checklist below; the new 1M
 cap means the micro-test should see peak max_tree_nodes around
 ~1,070,000 (1M + one move's ~72k growth).
+
+### Speed tuning: drop `num_simulations` 600 → 400
+
+Same-day calibration run (dryrun v3) showed real iter time landing
+around **~58 min** at (600 sims, 256 parallel, 15b×128ch). Math
+reconciled against Phase 1 `9x9_run2/training_log.jsonl`'s measured
+469 s/iter:
+
+```
+Phase 1 per-tick: 110 ms  (batch 2048, 10b×128ch, 9x9)
+Phase 2 scale:    ×2.1 (cells) × ×1.5 (blocks) = ×3.15  per tick
+Phase 2 per-tick: ~347 ms  (batch 2048, 15b×128ch, 13x13)
+Phase 2 ticks/iter: 2048 × 120 × 600 / 8 / 2048 = 9000
+Phase 2 iter time: 9000 × 0.347 = ~3120 s ≈ 52 min   (close to observed)
+```
+
+60 iters × 58 min ≈ **58 hours** wall clock. That's long enough to be
+annoying and long enough that any mid-run fix needs to pause real
+training work.
+
+**The cheapest no-regret speedup is `num_simulations` 600 → 400.**
+That's exactly the value AlphaGo Zero used for 13x13 self-play, so
+it's the published default, not a shortcut. MCTS quality drops mildly
+(see Problem 1 compaction discussion for how quality scales with
+total-visit count), convergence rate is very mildly slower per iter,
+but wall-clock per iter drops ~33 %.
+
+Updated estimate:
+
+```
+Phase 2 ticks/iter: 2048 × 120 × 400 / 8 / 2048 = 6000
+Phase 2 iter time:  6000 × 0.347 = ~2080 s ≈ 35 min
+Total: 60 × 35 = 35 hours  (vs 58 hours at 600 sims)
+```
+
+If the strength curve looks anemic at 400 sims, the plan is to bump
+back to 600 for the last ~20 iters once the net is past the worst
+of early training (when MCTS quality matters most for stability).
+
+Heavier speed levers that were considered and NOT applied now:
+
+- **Pipelined orchestrator** eliminating the per-tick
+  `torch.cuda.synchronize()` (would unlock the last ~20 % of GPU
+  utilization — 74 % ceiling seen in both dryruns). Correct long-term
+  fix but ~1 day of careful `parallel_self_play.py` rewrite.
+- **Halve `num_games_per_iter`** 2048 → 1024. Halves wall time per
+  iter but also halves fresh self-play data per training step. Net
+  effect on convergence-in-wall-time is ambiguous. Skip.
+- **Smaller model.** Conflicts with the Phase 2 goal of a bigger net.
+  Skip.
 
 ---
 

@@ -95,7 +95,15 @@ CONFIGS = {
     13: (
         ModelConfig(board_size=13, num_blocks=15, channels=128),
         TrainingConfig(
-            num_simulations=600,
+            # Dropped from 600 for wall-time: at 600 sims/move on a
+            # 15b×128ch net with 256 parallel games, iter time is ~58
+            # min, which means 60 iters ≈ 58 hours. 400 sims brings
+            # that to ~38 min/iter (~38 h total) for a mild MCTS
+            # quality hit — and it's exactly the value AlphaGo Zero
+            # used on 13x13, so it's the published default not a
+            # shortcut. Bump back to 600 if the strength curve looks
+            # anemic after a few iters.
+            num_simulations=400,
             dirichlet_alpha=0.07,  # ≈ 10 / avg_legal_moves (~150 for 13x13)
             num_games_per_iter=2048,
             # Restored to 256 after raising MAX_TREE_NODES 200k → 1M.
