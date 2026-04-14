@@ -453,6 +453,56 @@ Heavier speed levers that were considered and NOT applied now:
 - **Smaller model.** Conflicts with the Phase 2 goal of a bigger net.
   Skip.
 
+### Dryrun v4 — measured ground truth
+
+Launched 2026-04-14 09:42 UTC. Full 1-iter dryrun with the final
+tuned config: 256 parallel × 400 sims × 1M tree cap × 15b×128ch.
+Completed cleanly at T+~42 min.
+
+| metric | measured | vs prediction |
+|---|---:|---|
+| iter 0 total time | **41.6 min** | predicted 35 min (+19 %) |
+| self-play time | 41.5 min | — |
+| train step time | 2.1 s | — |
+| games completed | 2049 | target 2048 |
+| positions harvested | 307,678 | — |
+| **avg moves / game** | **150** | **predicted 120 — root of the 19 % miss** |
+| ticks | 64,301 | matches 2048 × 150 × 400 / 8 / 256 |
+| ticks/sec | 25.8 | — |
+| per-tick time | **38.8 ms** | — |
+| peak cgroup memory | **31.01 GB** | predicted ~30 GB ✓, abort line 35 GB |
+| train loss | 5.97 (π=5.15, v=0.82) | finite, reasonable cold-net value |
+| grad skips | 0 | — |
+| `checkpoint_0000.pt` | 36.5 MB | — |
+| `latest_buffer.npz` | 1094 MB (307k positions) | — |
+
+**Takeaways:**
+
+- **Memory is safe.** Peak 31 GB under the 35 GB ceiling with ~4 GB
+  headroom. The 1M tree cap + 256 parallel games combo does what it
+  said on the tin. No OOM risk for the full run.
+- **Wall time is 19 % slower than projected** because 13x13 games at
+  this net strength average ~150 moves, not 120. My projection
+  overcorrected for 9x9's 85 moves but underestimated the draw of
+  longer 13x13 openings. Per-tick time (38.8 ms) matches the
+  3.14× scaling factor from Phase 1 almost exactly — no hidden
+  overhead, just more moves to search.
+- **Training signal is clean.** Loss 5.97 is where a cold 15b×128ch
+  13x13 net should land; no NaN; no grad-clip skips. The pipeline is
+  correct end-to-end.
+- **Updated full-run estimate:**
+  ```
+  iter 0:                ~42 min (includes ~4 min autotune warmup)
+  iter 1..59 each:       ~37 min (no autotune) — estimate
+  total 60 iters:        ~36–42 hours wall clock
+  ```
+  The iter 1+ estimate assumes autotune is cached (it is) and that
+  game length stabilizes around 150 moves. If games grow longer as
+  the net gets stronger (common in Zero training), iters will
+  gradually slow; if they shorten (resign firing more), iters will
+  speed up. Either way the total lands **under 2 days** wall clock,
+  acceptable for a Phase 2 training run.
+
 ---
 
 ## Starting Phase 2 on a new device
