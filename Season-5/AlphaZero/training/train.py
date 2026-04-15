@@ -121,6 +121,23 @@ def evaluate_vs_random(net, device, model_cfg, train_cfg, num_games=100):
     return wins / num_games
 
 
+def set_all_seeds(seed: int):
+    """Seed every RNG that affects the run.
+
+    Phase 2 run1 vs run2 had a 19pp gap in iter 0 eval-vs-random under
+    "identical" conditions because (a) net init was unseeded so weights
+    differed, (b) np.random in the random-player evaluator was unseeded
+    so the opponent's moves differed. Seeding gives a real chance at
+    apples-to-apples comparison across runs.
+    """
+    import random as _random
+    _random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def main():
     parser = argparse.ArgumentParser(description="AlphaZero Training")
     parser.add_argument("--board-size", type=int, default=9, choices=[9, 13, 19])
@@ -146,7 +163,12 @@ def main():
     parser.add_argument("--anchor-frac", type=float, default=0.2,
                         help="Fraction of each train batch drawn from the "
                              "anchor buffer")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="RNG seed for reproducibility (torch, np, random)")
     args = parser.parse_args()
+
+    set_all_seeds(args.seed)
+    print(f"  Seeds: torch/np/random = {args.seed}")
 
     # Select config
     model_cfg, train_cfg = CONFIGS[args.board_size]

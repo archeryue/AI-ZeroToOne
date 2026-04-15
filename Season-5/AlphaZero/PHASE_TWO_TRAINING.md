@@ -1183,6 +1183,298 @@ on real data yet — these are the menu for tomorrow:
 - **Explicit torch seed** to make runs reproducible, so we can
   actually compare apples to apples.
 
-See `PHASE_TWO_HANDOVER.md` for the next-session plan.
+---
+
+## Run 3 — offline A/B-driven recipe selection
+
+Picked up the next session with a stricter approach: don't pick a
+lever blind, **measure every candidate against a real cold buffer
+first** and only commit a recipe with controlled-experiment evidence.
+
+### Step 1 — full code audit (no bug found)
+
+Before running any new training, audited every code path that
+touches the value target end-to-end:
+
+- **Sign convention** in `play_one_game` (`training/self_play.py`)
+  and the C++ `finish_game` (`engine/worker.h`): both flip the
+  game outcome to current-player perspective consistently.
+- **Observation encoding** in `Game::to_observation` (`engine/go.h`):
+  stone planes are `me`/`opp` from the current player's perspective,
+  matched by a color-to-play indicator on plane 16. Consistent with
+  the value target's perspective.
+- **Replay buffer 8-fold augmentation** (`replay_buffer.py`):
+  `value` is sym-invariant and correctly preserved through all 8
+  rotations/flips. uint8 cast is lossless for 0/1 obs cells.
+- **Train/eval mode plumbing**: `parallel_self_play.run_games()`
+  calls `self.net.eval()`, `trainer.train_step` calls
+  `self.net.train()`, `evaluate_vs_random` calls `net.eval()`. The
+  torch.compile wrapper respects mode changes on the underlying
+  module.
+
+**Verdict:** no hidden bug. The value-target pipeline is correct.
+The failure has to be in the optimization dynamics on this
+particular data distribution.
+
+### Step 2 — offline A/B harness
+
+Wrote `training/_phase2_offline_ab.py`, a two-phase script:
+
+1. **`gen-buffer`** — seeds RNGs (`SEED=42`), instantiates the real
+   13×13 net at random init, saves the cold weights, runs **256
+   cold self-play games** at production settings (15b×128ch, 400
+   sims, 5 workers) into a saved `.npz` buffer. ~12 min of
+   self-play, produces 28,253 positions, 108 avg moves, perfectly
+   balanced labels (+1 fraction 0.501, mean +0.001).
+2. **`run-ab`** — for each candidate recipe, reloads the **same**
+   cold weights and trains against the **same** buffer with that
+   recipe's hyperparameters. Records (a) held-out value MSE on a
+   5k-sample slice never used for training, (b) `below_resign_frac`
+   (fraction of held-out positions where the trained head outputs
+   v < −0.9, a direct proxy for triggering the resign loop in the
+   next iter), (c) value-head saturation rate (|v| > 0.95), (d)
+   first-5 vs last-5 training loss to see the per-step trajectory.
+
+The per-recipe wall time is ~1–4 s on the 4090, so all 14 recipes
+finish in under a minute. The offline test is a **single-iter**
+simulation — it cannot capture iter-over-iter buffer evolution, but
+it IS faithful in per-position exposure (~8.5% buffer coverage per
+iter at production batch size, same in offline and production).
+
+### Step 3 — recipes tested and results
+
+Tested 14 recipes. Held-out MSE baseline (cold weights, no
+training) is **1.0035** — that's the "predict zero against ±1
+labels" floor. **Δv > 0 means the recipe made things worse on
+unseen positions.**
+
+```
+recipe         pre_v  post_v       Δv   tr1st   trlst   sat  resign%
+R1-current    1.0035  1.6342  +0.6307  0.9368  0.0476  0.25    21.0%   ← prod
+R2-steps30    1.0035  1.1122  +0.1087  0.9368  0.2693  0.00     0.0%   ← BEST
+R3-vlw1       1.0035  1.5408  +0.5373  0.9466  0.0533  0.25    19.3%
+R4-huber      1.0035  1.6588  +0.6553  0.4709  0.0269  0.35    15.6%
+R5-lowLR      1.0035  1.3616  +0.3580  0.9809  0.1313  0.00     2.8%
+R6-vlw0.5     1.0035  1.6086  +0.6051  0.9619  0.0701  0.24    10.1%
+R7-bundled    1.0035  1.2919  +0.2884  0.4864  0.2879  0.00     0.0%
+R8-vlw4       1.0035  1.6614  +0.6578  0.9332  0.0623  0.28    17.8%
+R9-warmup     1.0035  1.5810  +0.5775  0.9614  0.0656  0.31    15.9%
+R10-valOnly   1.0035  1.7150  +0.7115  0.9319  0.0436  0.29    25.8%
+B1-bce100     1.0035  1.9566  +0.9530  0.6814  0.0616  0.78    33.1%
+B2-bce30      1.0035  1.5054  +0.5018  0.6814  0.4290  0.00     0.2%
+B3-bce-low    1.0035  1.5809  +0.5773  0.6888  0.3491  0.06    17.6%
+B4-bce-vlw1   1.0035  1.7603  +0.7568  0.6855  0.0910  0.51    40.1%
+```
+
+### Step 4 — what the data says
+
+**Every single recipe has Δv > 0.** Pre-train cold MSE (1.0035) is
+literally the "always predict zero" floor. None of the 14 recipes
+pushed the value head into a state that GENERALIZED better than
+predicting zero on cold data.
+
+But the WAY they fail is informative. Three distinct fingerprints:
+
+1. **Catastrophic overfit fingerprint** — R1, R3, R4, R8, R9, R10:
+   training loss collapses to <0.1 (95% drop), held-out MSE jumps to
+   ~1.6, saturation 25–35%, `below_resign_frac` 15–25%. These
+   recipes train hard enough to memorize the 28k cold labels, then
+   produce confident wrong predictions on held-out positions. **R10
+   (value-only, zero policy gradient) is in this group with the
+   WORST numbers** — which kills the original "policy is
+   cannibalizing the trunk" hypothesis. The value head fails even
+   when nothing else is touching the trunk.
+
+2. **Under-train fingerprint** — R2, R7: training loss only drops to
+   ~0.27, held-out MSE only +0.11/+0.29, saturation 0%,
+   `below_resign_frac` 0%. The value head moves a tiny bit but
+   doesn't aggressively overfit. **These wouldn't trigger a doom
+   loop in iter 1** — that's what `below_resign_frac=0` means.
+
+3. **WDL/BCE is WORSE than MSE** — B1–B4: at 100 steps the BCE head
+   shows saturation **78%** (vs 25% with MSE), held-out **1.96** (vs
+   1.63), and `below_resign_frac` 33% (vs 21%). The intuition: MSE
+   gradient is bounded by 2 once `|v − target| = 1` (the loss for
+   predicting 0 against ±1 caps at 1.0), but BCE-with-logits keeps
+   pushing toward extremes regardless. On noisy ±1 labels, BCE
+   memorizes harder and produces MORE confident wrong predictions.
+   **WDL escalation is ruled out** — it would be strictly worse.
+
+### Step 5 — failure mode reframed
+
+The Phase 2 run1/run2 problem was diagnosed in the original
+narrative as "value-head cannibalization by policy gradient." The
+offline A/B refutes that:
+
+- **R10 (value-only)** has the worst Δv. If policy were stealing
+  the trunk, removing policy should help — instead it hurts.
+- **Huber and warmup don't help.** The drift isn't gradient-noise.
+- **Reducing steps DOES help** (R2 vs R1). The issue is
+  *exposure*, not gradient direction.
+
+The real failure mode is **classic overfit to noisy labels on a
+small cold buffer**. Cold-game outcomes are essentially random
+(50.1% black wins!). A 4.5M-param network has more than enough
+capacity to memorize 28k random labels in <1 epoch and produce
+confident wrong predictions on unseen positions. Once those wrong
+predictions feed back into MCTS, MCTS picks worse moves, games
+get shorter (resigns trigger), the next iter trains on even worse
+data, and the doom loop kicks in.
+
+### Step 6 — escalation tree
+
+Three escalation paths, each addressing a different failure
+mechanism:
+
+| observed pattern | failure mechanism | escalation |
+|---|---|---|
+| value loss zigzags + saturation high | tanh+MSE gradient instability | **WDL head (Lc0)** — RULED OUT by B1-B4 |
+| simple fixes don't doom-loop but barely learn | sparse outcome-only supervision | **Ownership head (KataGo)** — 1 day |
+| simple fixes show slow positive trend | just slow convergence | **More iters / patience** |
+
+R2's offline behavior (no overfitting, no resigns, training loss
+DOES drop on the training set) is consistent with the "needs
+patience" branch — but a single-iter offline test cannot prove
+iter-over-iter bootstrapping will actually escape cold-start. That
+question can only be answered by a live multi-iter validation.
+
+### Step 7 — Run 3 recipe and launch
+
+Picked **R2** as the production candidate, with the **smallest
+possible code diff** so the change is auditable:
+
+```python
+# model/config.py — 13x13 preset
+train_steps_per_iter=30,   # NEW: was implicit 100 (default)
+# (value_loss_weight=2.0, lr_init=0.005, resign_min_move=40 unchanged)
+```
+
+```python
+# training/train.py — added a seed call at main() entry
+def set_all_seeds(seed: int):
+    import random as _random
+    _random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+# ...
+parser.add_argument("--seed", type=int, default=42)
+# ...
+set_all_seeds(args.seed)
+```
+
+That's the entire code change. **Huber, BCE, warmup, value-only,
+LR cuts — all rejected by the A/B.** The seed is for run-to-run
+reproducibility (run1 vs run2 had a 19pp eval gap at iter 0 partly
+because RNGs were unseeded).
+
+### Smoke test (143k-param tiny model, 3 iters)
+
+```
+Iter 0 | Train: loss=7.3174 (pi=5.2037, v=1.0569) | Eval 70%
+Iter 1 | Train: loss=7.1942 (pi=5.1852, v=1.0045) | Eval 70%
+Iter 2 | Train: loss=6.9419 (pi=5.1861, v=0.8779) | Eval 75%
+```
+
+Value loss drops monotonically (1.057 → 1.005 → 0.878). Eval
+non-regressing. Confirms the new config is wired and the seed
+machinery doesn't break anything.
+
+### Run 3 launch
+
+```bash
+cd /root/AI-ZeroToOne/Season-5/AlphaZero
+mkdir -p checkpoints/13x13_run3 logs
+PYTHONPATH=engine nohup python -m training.train \
+    --board-size 13 --iterations 60 \
+    --output-dir checkpoints/13x13_run3 \
+    > logs/13x13_run3.log 2>&1 &
+```
+
+### Memory budget on this instance
+
+Re-checked the cgroup limit because the previous narrative assumed
+62 GB. Actual:
+
+- Host total: 755 GiB
+- cgroup v1 limit: **93,999,996,928 bytes ≈ 87.5 GiB**
+- Production peak (run1/run2 measured): ~40 GiB
+- **Headroom: ~47 GiB** — far above the 46–48 GiB target
+
+No memory-budget edits needed for run3.
+
+### Hard go/no-go gate at iter 5
+
+This is the discipline that makes "R2 first" defensible. R2's
+offline behavior justifies running it, but only briefly — pull
+the abort handle if iter 5 looks bad rather than burning 38h
+hoping.
+
+**GREEN** (let the full 60 iters run unattended ~38h):
+- `value_loss` flat-or-falling across iters 0→5
+- `eval_vs_random` non-regressing AND ≥ ~10–15 % by iter 5
+- `avg_moves/game` stays in the 100–160 range (no resign collapse)
+- cgroup memory stable, well under 60 GB
+
+**RED** (kill, escalate to ownership-head implementation):
+- `value_loss` rising 2 iters in a row
+- `eval_vs_random` stuck near 0 % for 3 consecutive iters past iter 2
+- `avg_moves/game` < 80
+- any crash / OOM
+
+### Next escalation if R2 fails: KataGo ownership head
+
+If iter 5 is RED, the next-and-only escalation is a **per-cell
+ownership auxiliary head** à la KataGo. Rationale:
+
+- Outcome-only supervision (1 scalar label per ~150 moves of game)
+  is the documented failure mode at this net size. KataGo
+  specifically built ownership to address it on 19×19; we're in the
+  same regime.
+- Per-cell ownership gives **169× more supervision per position**
+  (one binary label per cell, computed from final board territory
+  via Tromp-Taylor). The trunk is forced to learn spatial features
+  that generalize.
+- David Wu's paper claims ~50× learning speedup on 19×19 from this
+  single change.
+
+**Implementation sketch (~1 day of work):**
+
+1. **C++ side** — track per-cell final ownership at game end in
+   `worker.h::finish_game`, write into `MoveRecord`, harvest
+   alongside obs/policy/value.
+2. **Buffer schema** — add `ownership: uint8 (capacity, N, N)`
+   alongside the existing tensors. Augment under the same 8-fold
+   symmetry as obs.
+3. **Network** — add second conv1×1(ch→1) head, sigmoid,
+   per-cell BCE loss vs ownership target.
+4. **Trainer** — add `aux_loss_weight` (start at ~0.1), add
+   ownership term to total loss.
+5. **Re-run cold buffer + offline A/B** with ownership enabled to
+   validate before launching another live run.
+
+WDL escalation is **explicitly ruled out** — the BCE recipes in
+this A/B prove WDL would be strictly worse than the current MSE
+recipe.
+
+### Things the offline A/B definitively ruled out
+
+- Loss-formulation instability (BCE/WDL is worse, not better)
+- Policy-trunk cannibalization (R10 value-only is the worst recipe)
+- Huber as a fix (R4 looks identical to R1)
+- LR alone as a fix (R5 reduces overfitting but doesn't fix it)
+- Warmup as a fix (R9 is no better than R6 at vlw=0.5)
+
+### Things still untested (saved for after R2 verdict)
+
+- KataGo ownership head (the real escalation if R2 fails)
+- Score-distribution head (KataGo's secondary innovation; only
+  worth adding on top of ownership)
+- 9×9 → 13×13 weight transfer / supervised pretraining (handover
+  fallback; ~1 day of architecture-transfer code, only worth doing
+  if both R2 AND ownership head fail)
+- Two-tower (separate trunks for policy and value): refuted by the
+  R10 value-only result, no longer interesting
 
 ---

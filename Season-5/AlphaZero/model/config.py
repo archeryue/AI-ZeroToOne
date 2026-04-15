@@ -153,6 +153,17 @@ CONFIGS = {
             # balances the two heads' gradient contributions. See
             # PHASE_TWO_TRAINING.md Problem 4.
             value_loss_weight=2.0,
+            # 30 steps/iter (down from 100) is the run3 fix from the
+            # offline A/B (training/_phase2_offline_ab.py): with 100
+            # steps the value head memorizes 28k cold positions in <1
+            # epoch and produces confident wrong predictions on
+            # held-out (resign% 21, sat 25%). 30 steps under-trains per
+            # iter (no per-iter overfitting, resign% 0, sat 0) and
+            # leaves room for cumulative iter-over-iter bootstrapping.
+            # 30 × 60 iters = 1800 total SGD steps; ~46% buffer
+            # coverage at the 1M cap. WDL/BCE was tested and is worse
+            # than MSE in this regime.
+            train_steps_per_iter=30,
             # Eval every iter instead of every 5 iters for run2's first
             # few iters — we need iter-by-iter strength visibility to
             # confirm the fix actually works. Can revert to 5 once the
