@@ -165,6 +165,13 @@ def main():
                              "anchor buffer")
     parser.add_argument("--seed", type=int, default=42,
                         help="RNG seed for reproducibility (torch, np, random)")
+    parser.add_argument("--eval-in-loop", action="store_true",
+                        help="Run evaluate_vs_random inline each iter. "
+                             "Disabled by default because run4/run4b hung in "
+                             "eval (process-state-dependent deadlock, not a "
+                             "network bug — see PHASE_TWO_TRAINING.md). "
+                             "Use training/_eval_checkpoints.py post-hoc "
+                             "instead for the strength curve.")
     args = parser.parse_args()
 
     set_all_seeds(args.seed)
@@ -310,14 +317,16 @@ def main():
             print(f"         | Checkpoint saved: {ckpt_path}", flush=True)
 
         # 4. Evaluate periodically — after checkpoint so crashes here
-        # don't cost the trained weights.
+        # don't cost the trained weights. DISABLED BY DEFAULT (run4/4b
+        # hung inside evaluate_vs_random with a process-state deadlock
+        # we could not diagnose; isolated repro confirmed eval works
+        # fine in a fresh process). Run training/_eval_checkpoints.py
+        # post-hoc on the saved checkpoints for the strength curve.
+        # Pass --eval-in-loop to opt back in (smoke tests still want it).
         eval_stats = {}
-        if (iteration + 1) % train_cfg.eval_interval == 0:
+        eval_enabled = args.eval_in_loop or args.smoke_test
+        if eval_enabled and (iteration + 1) % train_cfg.eval_interval == 0:
             ev_start = time.time()
-            # 50 games on 13x13 (was 100) — halves eval wall time,
-            # shrinks the window for an external kill to hit, still
-            # statistically meaningful (binomial σ for p=0.15 on 50
-            # games is ±5 pp, vs ±3.6 pp on 100 — good enough).
             num_eval = 20 if args.smoke_test else 50
             win_rate = evaluate_vs_random(net, device, model_cfg, train_cfg,
                                           num_games=num_eval)
