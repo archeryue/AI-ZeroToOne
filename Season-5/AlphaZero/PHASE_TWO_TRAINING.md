@@ -2,60 +2,79 @@
 
 Living document for the 13x13 Phase 2 run. Phase 1 (9x9) wrapped with
 the iter 39 checkpoint as the Elo peak of `9x9_run2`; Phase 2 moves to
-a bigger board, a bigger net, and more sims per move. The code-side
-prep and a first OOM fight happened before the full run started —
-they're captured below.
+a bigger board, a bigger net, and more sims per move.
 
-This file mirrors the structure of `PHASE_ONE_TRAINING.md`: prep work,
-then a numbered list of problems as they hit and got fixed, then the
-live run log.
+This document is organized into three sections mirroring how the work
+actually unfolded:
+
+1. **Training preparation** — the uint8 buffer memory optimization
+   plus the other code and config work landed before any 13x13 training
+   started.
+2. **Fixing OOM problems** — the MCTS tree memory leak, cgroup
+   page-cache accounting, and the memory-budget audit that followed.
+3. **Fixing the regression issue** — the value-head instability that
+   broke every early attempt, including the run1/run2/run3 wrong
+   diagnoses, the offline-A/B-driven recipe selection, and the final
+   KataGo-style ownership head + derived value architecture that
+   actually addressed the root cause.
 
 ---
 
 ## Environment
 
-- **Host:** RTX 4090 24 GB, cgroup memory budget **~42 GB** but the
-  *operational* ceiling is **36 GB** — above that RunPod gets unstable
-  and recovering the instance costs real time. Treat 36 GB as the hard
-  cap.
-- **Python 3.11**, **torch 2.4.1+cu124** with inductor / Triton
+- **Host:** RTX 4090 24 GB.
+- **cgroup v1 memory limit:** **~87.5 GiB** (re-measured at run3 —
+  earlier runs assumed 42 GB then 62 GB based on stale notes; the real
+  hard cap on this instance is 93,999,996,928 bytes). Run1/2/3 peaks
+  landed around 40 GiB, leaving ~47 GiB headroom.
+- **Host MemTotal:** 755 GiB (the container is tiny relative to the
+  host).
+- **Python 3.11**, **torch 2.4.1+cu124** with inductor / Triton.
 - `oom_kill_disable=1` in this container, so hitting the cgroup cap
-  produces a silent SIGKILL with no Python traceback — same failure
-  mode as Phase 1 run 2 (see `PHASE_ONE_TRAINING.md` Problem 4).
+  would freeze rather than SIGKILL.
 
 ## Config at a glance (`CONFIGS[13]` in `model/config.py`)
+
+Values are the current state after all prep + fixes. Anywhere a number
+changed during Phase 2, the final value is shown and the change is
+documented in the relevant section below.
 
 | knob | value | notes |
 |---|---:|---|
 | `num_blocks × channels` | 15 × 128 | vs 10 × 128 on 9x9 |
-| `num_simulations` | **400** | same as AlphaGo Zero 13x13; cut from 600 for wall-time (see "Speed tuning: drop sims 600 → 400") |
+| `num_simulations` | **400** | AlphaGo Zero 13x13 default; cut from 600 for wall-time |
 | `dirichlet_alpha` | 0.07 | ≈ 10 / avg_legal_moves (~150 early) |
-| `num_parallel_games` | **256** | restored after Problem 1 follow-up (see "Tuning 1M cap + 256 parallel") |
+| `num_parallel_games` | **256** | restored after Problem 1 follow-up |
 | `num_games_per_iter` | 2048 | same as 9x9 |
 | `buffer_size` | 1,000,000 | vs 500k on 9x9 |
 | `max_game_moves` | 250 | vs 150 on 9x9 |
 | `temperature_moves` | 40 | ≈ 1/3 of avg 120-move game |
 | `temperature_low` | 0.25 | preserves runner-up signal |
 | `lr_init` | 0.005 | halved vs 0.01 default; 9x9 run 2 fix |
+| `resign_min_move` | **40** | raised 20→40 after Problem 3 |
+| `train_steps_per_iter` | **30** | down from 100 — see regression section |
+| `value_loss_weight` | **0.0** | run4 derived-value fix, see regression section |
+| `ownership_loss_weight` | **2.0** | new run4 knob, KataGo-style |
 | `checkpoint_interval` | 1 | per-iter for post-hoc Elo audits |
-| `eval_interval` | 5 | tight cadence to catch BN drift early |
+| `eval_interval` | 1 | every iter, for run3/run4 iter-by-iter visibility |
 
 ---
 
-## Prep work landed before the run
+# Section 1 — Training preparation
 
-Ordered by the order they were done, not by importance. Every item
-here was validated — test/run output is either quoted or committed.
+Work done before any 13x13 training started. Ordered by the order done,
+not by importance. Every item was validated — test/run output is either
+quoted or committed.
 
-### 1. uint8 replay buffer ✅
+## 1. uint8 replay buffer ✅
 
 **Motivation.** The 13x13 1M-sample buffer as float32 is **12.2 GB**
-(vs 1.6 GB for the 9x9 500k buffer). On the 42 GB cgroup host that
-does not fit alongside ~30 GB of MCTS trees + torch.compile cache +
-model state — the savez transient alone pushes RSS over the edge.
-Every obs plane cell is exactly 0 or 1 (verified in
-`training/_test_correctness.py`), so storing them as `uint8` is a
-**lossless 4× memory cut**.
+(vs 1.6 GB for the 9x9 500k buffer). On the 42 GB cgroup host that the
+notes at the time assumed, that did not fit alongside ~30 GB of MCTS
+trees + torch.compile cache + model state — the savez transient alone
+would push RSS over the edge. Every obs plane cell is exactly 0 or 1
+(verified in `training/_test_correctness.py`), so storing them as
+`uint8` is a **lossless 4× memory cut**.
 
 | | float32 | uint8 |
 |---|---:|---:|
@@ -90,7 +109,7 @@ directly. With uint8 storage, the GPU copies 1 B/cell (4× faster) and
 `.float()` materializes a `float32` tensor — modern CUDA fuses the
 dtype conversion into the load, so it's not new work.
 
-**Validation.** `training/_test_correctness.py` now has stage `[1c]`:
+**Validation.** `training/_test_correctness.py` has stage `[1c]`:
 dtype check, float32→uint8→float32 round-trip identity, save_to /
 load_from round-trip identity, 8-way symmetry correctness match
 against `augment_8fold` reference, pass-action invariance, and legacy
@@ -110,7 +129,7 @@ buffer another 8× to 0.36 GB. Needs ~30 lines for `np.packbits` index
 bookkeeping plus a ~10 µs per-sample unpack. Revisit if Phase 3 (19x19,
 6.4 GB even as uint8) actually hits memory pressure.
 
-### 2. Replay buffer persistence re-enabled ✅
+## 2. Replay buffer persistence re-enabled ✅
 
 Persistence was **disabled** in `train.py` during 9x9 run 2 because
 `np.savez` on the float32 buffer materialized a transient that pushed
@@ -122,29 +141,29 @@ savez transient is also ~4× smaller, so `train.py` now calls
 
 Upside beyond just not losing the buffer on crash: crash recovery is
 now a one-liner — resume with `--checkpoint
-checkpoints/13x13_run1/checkpoint_NNNN.pt` and the buffer reloads from
+checkpoints/13x13_runN/checkpoint_XXXX.pt` and the buffer reloads from
 `latest_buffer.npz` automatically.
 
-### 3. 13x13-specific exploration & resign tuning ✅
+## 3. 13x13-specific exploration & resign tuning ✅
 
 These aren't bugs, they're choices that need to be revisited whenever
 the board size changes.
 
 - **Dirichlet α = 0.07.** Formula α ≈ 10 / avg_legal_moves. 13x13 has
-  ~150 legal moves early game → 0.067. PLAN.md's 0.07 is right.
+  ~150 legal moves early game → 0.067.
 - **Temperature schedule: `temperature_moves=40`, `temperature_low=0.25`.**
   9x9 run 2's `(30, 0.25)` was tuned for ~85-move games; 13x13 averages
   ~120 moves. 40 keeps the exploration window at ~1/3 of the avg game
   like the tuned 9x9 setup. `temperature_low=0.25` (vs default 0.1)
   preserves runner-up move signal in training targets so the net sees
   a smoother policy, not collapsed one-hot.
-- **Resign v2 thresholds unchanged from 9x9 run 2.** `resign_min_move=20`
-  is 17 % of a 120-move 13x13 game (vs 13 % of an 85-move 9x9 game).
-  Credible-child cross-check + move floor is game-size-agnostic. Raise
-  `resign_min_move` to 30 only if resign cuts too much mid-game data.
+- **Resign v2 thresholds initially unchanged from 9x9 run 2.**
+  `resign_min_move=20` was 17 % of a 120-move 13x13 game (vs 13 % of
+  an 85-move 9x9 game). This was **later raised to 40** under Problem 3
+  after the iter-1 early-resign data bias hit.
 - **`max_game_moves=250`** per PLAN.md vs 150 on 9x9.
 
-### 4. Lower `lr_init` + per-iter checkpoints + tight eval cadence ✅
+## 4. Lower `lr_init` + per-iter checkpoints + tight eval cadence ✅
 
 Three `TrainingConfig` tweaks on the 13x13 preset, all cheap insurance:
 
@@ -155,11 +174,11 @@ Three `TrainingConfig` tweaks on the 13x13 preset, all cheap insurance:
 - **`checkpoint_interval=1`.** Phase 1 proved you cannot reconstruct
   weight-drift trajectories from sparse snapshots. 60 iters × ~36 MB
   ≈ 2.2 GB of checkpoints — trivial.
-- **`eval_interval=5`.** Tight cadence so BN drift or strength
-  regressions get caught within a few iters instead of waiting 10+
-  iters like Phase 1 run 1.
+- **`eval_interval=5`** (later tightened to `1` for run2/3/4 to get
+  iter-by-iter strength visibility while the regression work was
+  happening).
 
-### 5. Anchor-buffer mixing — kept optional
+## 5. Anchor-buffer mixing — kept optional
 
 The `--anchor-buffer` / `--anchor-frac` CLI path stays in. Phase 2
 starts **without** an anchor (fresh Zero training). If 13x13 hits the
@@ -168,7 +187,23 @@ known-good 13x13 checkpoint and restart with
 `--anchor-buffer path/to/anchor_buffer.npz --anchor-frac 0.2`, exactly
 like the 9x9 run 2 recovery recipe.
 
+## 6. Fresh-device handoff checklist
+
+```bash
+cd Season-5/AlphaZero/engine && python setup.py build_ext --inplace && cd ..
+PYTHONPATH=engine python training/_test_correctness.py   # → ALL CORRECTNESS CHECKS PASSED
+PYTHONPATH=engine python training/_test_tree_cap.py      # → PASS: tree cap honored
+PYTHONPATH=engine python -m training.train --board-size 13 --smoke-test --output-dir checkpoints/13x13_smoke
+# then: nohup PYTHONPATH=engine python -m training.train --board-size 13 --iterations 60 ...
+```
+
+Diagnostic hooks already wired: `faulthandler` 5-min thread dumps,
+`kill -USR1 <pid>` on-demand stacks, grad-clip + NaN-guard skip
+(watch `skipped_total`), per-iter `latest_buffer.npz` persistence.
+
 ---
+
+# Section 2 — Fixing OOM problems
 
 ## Problem 1 — Dryrun OOM (MCTS tree memory unbounded)
 
@@ -187,16 +222,11 @@ tail of `logs/13x13_dryrun.log` was a `faulthandler`
 `_worker_thread` at `tick_process` — no traceback, no Python error, no
 OOM message from Python. Docker crashed.
 
-### Wrong lead
-
-"Self-play is deadlocked." The stack dump shows workers inside
-`tick_process` / `tick_select`, which looks like a hang. It isn't —
-`faulthandler.dump_traceback_later(300)` fires every 5 min whether or
-not anything is stuck. Self-play was just *slow*, and while it was
-running the per-game MCTS trees were fattening up until the cgroup
-killed the container.
-
 ### Root cause: `MCTSTree::advance()` never frees orphaned subtrees
+
+(The `faulthandler` stack dumps in the log initially looked like a
+deadlock in `tick_process` / `tick_select`, but that's the 5-min
+periodic dump firing while self-play is just slow — not a hang.)
 
 Re-read of `engine/mcts.h::advance`:
 
@@ -248,7 +278,7 @@ Three changes, all small:
    check in `complete_move()` after `advance(action)`:
 
    ```cpp
-   static constexpr int MAX_TREE_NODES = 200000;
+   static constexpr int MAX_TREE_NODES = 200000;  // later raised to 1M
    // ...
    s.game.make_move(action);
    s.tree->advance(action);
@@ -259,12 +289,7 @@ Three changes, all small:
 
    `reset(game)` wipes `nodes` + `game_pool` and seeds a fresh tree
    rooted at `s.game`, so the next move starts with no inherited
-   visits but still gets its full `num_sims` budget. With the cap at
-   200k, per-tree peak is:
-
-   - `nodes`: 200k × 32 B = 6.4 MB
-   - `game_pool`: ~2k expanded × ~4.3 KB = 8.6 MB
-   - **per-tree ≈ 16 MB peak**
+   visits but still gets its full `num_sims` budget.
 
 2. **`model/config.py` 13x13 preset — `num_parallel_games=128`**
    (down from the 256 default). Defense in depth: halves tree memory,
@@ -273,81 +298,33 @@ Three changes, all small:
    15b×128ch net, so throughput is essentially unchanged.
 
 3. **`engine/mcts.h` — revert speculative `nodes.reserve(131072)`
-   back to `16384`.** I had preemptively bumped reserve during the
-   "decisions to revisit" audit; with the cap in place it's just a
-   startup optimization, and the larger value wasted ~1 GB of baseline
-   RSS sitting behind 256 allocated-but-unused vectors.
+   back to `16384`.** A preemptive bump during an earlier audit; with
+   the cap in place it's just a startup optimization, and the larger
+   value wasted ~1 GB of baseline RSS sitting behind 256
+   allocated-but-unused vectors.
 
 Also added two diagnostic helpers:
 
 - **`engine/worker.h::max_tree_nodes()`** — returns the max
-  `num_nodes()` across all slots. Exposed as
-  `SelfPlayWorker<N>::max_tree_nodes` in bindings.
+  `num_nodes()` across all slots.
 - **`MAX_TREE_NODES`** exposed as a Python-visible static property on
   each bound worker class, so tests can read it without hardcoding.
 
-### Post-fix memory budget (target: 36 GB)
-
-| component | estimate |
-|---|---:|
-| MCTS state (128 trees × ~16 MB peak) | ~2.1 GB |
-| Replay buffer (uint8 1M × 13×13 × 17 + policy + value) | ~3.6 GB |
-| `buffer.save_to` np.savez transient | ~3.6 GB |
-| Pinned buffers + worker numpy arrays | ~60 MB |
-| Model + optimizer + torch.compile cache | ~1 GB |
-| CUDA allocator reserved + Python/C++ overhead | ~3 GB |
-| **Total** | **~14 GB** |
-
-Leaves **~22 GB of headroom** under the 36 GB ceiling. If observed
-peak RSS ever crosses ~20 GB, stop and investigate.
-
 ### Validation
 
-`training/_test_tree_cap.py` — new focused test. Drives a real
-`SelfPlayWorker13` at **production `num_sims=600`** with fake NN
-outputs for 30 s and asserts `max_tree_nodes` never exceeds
-`MAX_TREE_NODES + 120k` headroom at any probe, and that the harvest
-produces correctly-shaped arrays. Actual output:
+`training/_test_tree_cap.py` drives a real `SelfPlayWorker13` at
+production `num_sims=600` with fake NN outputs for 30 s and asserts
+`max_tree_nodes` never exceeds the cap. Peak observed on 4 parallel
+games: 289,803 nodes (below the 320k bound), RSS growth 0.33 GB over
+30 s. Passes.
 
-```
-Tree-cap test — MAX_TREE_NODES=200,000, hard bound=320,000
-  board=13x13, games/worker=4, num_sims=600, vl_batch=8
-
-  ticks=246409  games_done=93  positions_harvested=12847
-  peak max_tree_nodes across slots: 289,803 (limit 320,000)
-  RSS: start=0.033 GB  peak=0.367 GB  growth=0.334 GB
-  elapsed=30.0s, 8214 ticks/s
-  harvest: 12847 positions  (obs.shape=(12847, 17, 13, 13), pol.shape=(12847, 170))
-PASS: tree cap honored, RSS bounded, harvest intact
-```
-
-Four parallel games for 30 s grew RSS by only 0.33 GB — extrapolating
-linearly to 128 games × indefinite time, tree memory is bounded as
-expected. Peak 289,803 nodes matches the predicted `MAX_TREE_NODES +
-one-move-growth` ceiling.
-
-Also verified nothing else regressed:
-
-- `python -m training.train --board-size 13 --smoke-test` — 3 iters,
-  loss 6.24 → 6.06 monotonically, all 3 per-iter checkpoints saved,
-  final model written.
-- `python training/_test_correctness.py` — still prints
-  `ALL CORRECTNESS CHECKS PASSED`.
-
-### Why not proper compaction?
-
-Proper compaction (DFS-relabel the reachable subtree into a fresh
-`nodes` + `game_pool`, preserving every inherited visit) would be
-architecturally better — no tree-reuse loss at all, and steady-state
-tree size would converge around ~100-200k nodes *without* a hard cap.
-But it's ~80 lines of fragile pointer relocation bookkeeping across
-`nodes`, `game_pool`, and every `children_start` index, and a bug in
-that code would silently corrupt search.
-
-Reset-on-threshold is ~5 lines, obviously correct, and only throws
-away inherited visits every 3–5 moves on 13x13. Revisit compaction
-only if Phase 2 convergence looks anemic and the reset frequency turns
-out to be the bottleneck.
+**Why not proper compaction?** Proper compaction (DFS-relabel the
+reachable subtree into fresh storage, preserving inherited visits) is
+~80 lines of fragile pointer relocation across `nodes`, `game_pool`,
+and every `children_start` index — a bug there silently corrupts
+search. Reset-on-threshold is ~5 lines and obviously correct, only
+losing inherited visits every 3–5 moves on 13x13. Revisit only if
+convergence is bottlenecked on reset frequency.
 
 ### Follow-up tuning: raise cap 200k → 1M, restore 256 parallel games
 
@@ -372,7 +349,7 @@ was restored 128 → 256; the tree cap makes this safe now (peak MCTS
 state ~19 GB, not the ~280 GB of the uncapped version). The bigger
 GPU batch (256 × `vl_batch(8)` = 2048) amortizes per-tick CPU+sync
 overhead and should give an additional ~20–40 % speedup per iter from
-better GPU saturation (9x9 run 2 already ran this batch size happily).
+better GPU saturation.
 
 **Updated memory budget at peak (during savez transient, 256 parallel
 games, 1M cap):**
@@ -386,286 +363,41 @@ games, 1M cap):**
 | CUDA reserved + Python/C++ overhead | 3.0 |
 | **Total** | **30.2** |
 
-Leaves ~4.8 GB headroom under 35 GB. Watch first-iter RSS carefully
-— this is tighter than the conservative fix, and the savez transient
-is the most likely spike source.
-
 **Files touched:**
 
-- `engine/worker.h`: `MAX_TREE_NODES` 200000 → **1000000**, plus
-  expanded comment table showing the memory-vs-cold-move trade.
-- `model/config.py` 13x13 preset: `num_parallel_games` 128 → **256**
-  with a comment pointing at this section.
+- `engine/worker.h`: `MAX_TREE_NODES` 200000 → **1000000**.
+- `model/config.py` 13x13 preset: `num_parallel_games` 128 → **256**.
 - Engine rebuilt via `setup.py build_ext --inplace`.
-
-**Validation still pending.** Re-running `_test_tree_cap.py` and the
-13x13 smoke test is on the pre-full-run checklist below; the new 1M
-cap means the micro-test should see peak max_tree_nodes around
-~1,070,000 (1M + one move's ~72k growth).
 
 ### Speed tuning: drop `num_simulations` 600 → 400
 
-Same-day calibration run (dryrun v3) showed real iter time landing
-around **~58 min** at (600 sims, 256 parallel, 15b×128ch). Math
-reconciled against Phase 1 `9x9_run2/training_log.jsonl`'s measured
-469 s/iter:
+At 600 sims, 256 parallel, 15b×128ch the measured per-tick time was
+~347 ms (matching the 3.15× scale from Phase 1's 110 ms on 9x9 10b).
+That put iter time at ~52 min and total at ~58 hours for 60 iters.
 
-```
-Phase 1 per-tick: 110 ms  (batch 2048, 10b×128ch, 9x9)
-Phase 2 scale:    ×2.1 (cells) × ×1.5 (blocks) = ×3.15  per tick
-Phase 2 per-tick: ~347 ms  (batch 2048, 15b×128ch, 13x13)
-Phase 2 ticks/iter: 2048 × 120 × 600 / 8 / 2048 = 9000
-Phase 2 iter time: 9000 × 0.347 = ~3120 s ≈ 52 min   (close to observed)
-```
+Dropping to 400 sims — the AlphaGo Zero 13x13 published value, not a
+shortcut — cuts iter time ~33 % to ~35 min and total to ~35 hours.
 
-60 iters × 58 min ≈ **58 hours** wall clock. That's long enough to be
-annoying and long enough that any mid-run fix needs to pause real
-training work.
+### Dryrun v4 — ground truth
 
-**The cheapest no-regret speedup is `num_simulations` 600 → 400.**
-That's exactly the value AlphaGo Zero used for 13x13 self-play, so
-it's the published default, not a shortcut. MCTS quality drops mildly
-(see Problem 1 compaction discussion for how quality scales with
-total-visit count), convergence rate is very mildly slower per iter,
-but wall-clock per iter drops ~33 %.
-
-Updated estimate:
-
-```
-Phase 2 ticks/iter: 2048 × 120 × 400 / 8 / 2048 = 6000
-Phase 2 iter time:  6000 × 0.347 = ~2080 s ≈ 35 min
-Total: 60 × 35 = 35 hours  (vs 58 hours at 600 sims)
-```
-
-If the strength curve looks anemic at 400 sims, the plan is to bump
-back to 600 for the last ~20 iters once the net is past the worst
-of early training (when MCTS quality matters most for stability).
-
-Heavier speed levers that were considered and NOT applied now:
-
-- **Pipelined orchestrator** eliminating the per-tick
-  `torch.cuda.synchronize()` (would unlock the last ~20 % of GPU
-  utilization — 74 % ceiling seen in both dryruns). Correct long-term
-  fix but ~1 day of careful `parallel_self_play.py` rewrite.
-- **Halve `num_games_per_iter`** 2048 → 1024. Halves wall time per
-  iter but also halves fresh self-play data per training step. Net
-  effect on convergence-in-wall-time is ambiguous. Skip.
-- **Smaller model.** Conflicts with the Phase 2 goal of a bigger net.
-  Skip.
-
-### Dryrun v4 — measured ground truth
-
-Launched 2026-04-14 09:42 UTC. Full 1-iter dryrun with the final
-tuned config: 256 parallel × 400 sims × 1M tree cap × 15b×128ch.
-Completed cleanly at T+~42 min.
-
-| metric | measured | vs prediction |
-|---|---:|---|
-| iter 0 total time | **41.6 min** | predicted 35 min (+19 %) |
-| self-play time | 41.5 min | — |
-| train step time | 2.1 s | — |
-| games completed | 2049 | target 2048 |
-| positions harvested | 307,678 | — |
-| **avg moves / game** | **150** | **predicted 120 — root of the 19 % miss** |
-| ticks | 64,301 | matches 2048 × 150 × 400 / 8 / 256 |
-| ticks/sec | 25.8 | — |
-| per-tick time | **38.8 ms** | — |
-| peak cgroup memory | **31.01 GB** | predicted ~30 GB ✓, abort line 35 GB |
-| train loss | 5.97 (π=5.15, v=0.82) | finite, reasonable cold-net value |
-| grad skips | 0 | — |
-| `checkpoint_0000.pt` | 36.5 MB | — |
-| `latest_buffer.npz` | 1094 MB (307k positions) | — |
-
-**Takeaways:**
-
-- **Memory is safe.** Peak 31 GB under the 35 GB ceiling with ~4 GB
-  headroom. The 1M tree cap + 256 parallel games combo does what it
-  said on the tin. No OOM risk for the full run.
-- **Wall time is 19 % slower than projected** because 13x13 games at
-  this net strength average ~150 moves, not 120. My projection
-  overcorrected for 9x9's 85 moves but underestimated the draw of
-  longer 13x13 openings. Per-tick time (38.8 ms) matches the
-  3.14× scaling factor from Phase 1 almost exactly — no hidden
-  overhead, just more moves to search.
-- **Training signal is clean.** Loss 5.97 is where a cold 15b×128ch
-  13x13 net should land; no NaN; no grad-clip skips. The pipeline is
-  correct end-to-end.
-- **Updated full-run estimate:**
-  ```
-  iter 0:                ~42 min (includes ~4 min autotune warmup)
-  iter 1..59 each:       ~37 min (no autotune) — estimate
-  total 60 iters:        ~36–42 hours wall clock
-  ```
-  The iter 1+ estimate assumes autotune is cached (it is) and that
-  game length stabilizes around 150 moves. If games grow longer as
-  the net gets stronger (common in Zero training), iters will
-  gradually slow; if they shorten (resign firing more), iters will
-  speed up. Either way the total lands **under 2 days** wall clock,
-  acceptable for a Phase 2 training run.
+1-iter dryrun with the final tuned config (256 parallel, 400 sims,
+1M tree cap): **iter 0 in 41.6 min**, peak cgroup memory **31.0 GB**
+(under the 35 GB ceiling with ~4 GB headroom), train loss 5.97
+(π=5.15, v=0.82), **150 avg moves/game** (prediction was 120; 19%
+miss explains the 41 vs 35 min gap). No NaN, no grad skips, buffer
+1094 MB on disk. Pipeline correct end-to-end.
 
 ---
 
-## Starting Phase 2 on a new device
+## Problem 2 — `memory.usage_in_bytes` double-counts page cache
 
-Handoff checklist for picking this up on a fresh training host (RTX
-4090-class GPU + CUDA + ability to build `go_engine.*.so`).
+Date: **2026-04-14**. Status: **fixed by raising the ceiling**.
 
-### 0. Sync the code
+### What happened
 
-```bash
-git fetch origin
-git checkout main
-# Latest prep commit should include the OOM + tree-cap fix.
-git log --oneline -5
-```
-
-### 1. Build / rebuild the C++ engine
-
-The compiled `engine/go_engine.*.so` is platform + Python-ABI
-specific; always rebuild on a new host.
-
-```bash
-cd Season-5/AlphaZero/engine
-python setup.py build_ext --inplace
-cd ..
-python -c "import sys; sys.path.insert(0,'engine'); import go_engine; print(go_engine.__file__)"
-```
-
-### 2. Correctness smoke (fast, CPU-ok)
-
-```bash
-PYTHONPATH=engine python training/_test_correctness.py
-```
-
-Expected tail: `ALL CORRECTNESS CHECKS PASSED`.
-
-### 3. Tree-cap test (fast, CPU-ok)
-
-Direct regression test for Problem 1. Runs in ~30 s.
-
-```bash
-PYTHONPATH=engine python training/_test_tree_cap.py
-```
-
-Expected tail: `PASS: tree cap honored, RSS bounded, harvest intact`.
-
-### 4. 13x13 smoke test (3 iters, real GPU)
-
-```bash
-PYTHONPATH=engine python -m training.train \
-    --board-size 13 \
-    --smoke-test \
-    --output-dir checkpoints/13x13_smoke
-```
-
-`--smoke-test` shrinks to a 2b×32ch net, 16 sims, 32 games/iter,
-3 iters. Exercises the **full pipeline end-to-end** on the 13x13 code
-path without waiting hours.
-
-**What to watch:**
-
-- `ps -o rss= -p <pid>` peak RSS — should stay **well under 5 GB** for
-  the smoke config. If it doesn't, investigate before the full run.
-- No SIGKILL / no Python tracebacks at exit.
-- Per-iter checkpoints written, `training_log.jsonl` has 3 lines.
-
-### 5. Full Phase 2 run
-
-Once smoke passes cleanly:
-
-```bash
-mkdir -p logs checkpoints/13x13_run1
-
-nohup PYTHONPATH=engine python -m training.train \
-    --board-size 13 \
-    --iterations 60 \
-    --output-dir checkpoints/13x13_run1 \
-    > logs/13x13_run1.log 2>&1 &
-
-# Watch
-tail -f logs/13x13_run1.log
-```
-
-Expected per-iter (from `CONFIGS[13]`): 2048 games × 600 sims on a
-15b×128ch net with `num_parallel_games=128`. Peak RSS should stabilize
-around **14–18 GB**. **Hard ceiling: 36 GB** — abort and investigate
-if RSS trends above ~20 GB during iter 0-2.
-
-**Monitor RSS on the first 2–3 iters before walking away.** Phase 1
-learned the hard way that "it fit last iter" is not a guarantee it'll
-fit next iter when the buffer is still filling toward 1M samples.
-
-### 6. Things to double-check after the first training iter
-
-- `training_log.jsonl` line 0 has sane `self_play` stats (> 0 games,
-  > 0 positions, avg moves in 80–160 range for 13x13).
-- `train.loss` is finite and roughly 6–7 on iter 0 (cold net); any
-  `skipped` count should be 0 or very small.
-- `ls checkpoints/13x13_run1/` shows `checkpoint_0000.pt` (~36 MB for
-  a 15b×128ch net with Adam moments).
-- `checkpoints/13x13_run1/latest_buffer.npz` exists and grows toward
-  ~3.5 GB as the buffer fills.
-
-### 7. If something looks off — diagnostic hooks already wired
-
-- `faulthandler` prints all Python thread stacks on any fatal signal
-  and every 5 min to stderr (`train.py:29-37`). A stack dump there
-  does **not** by itself mean a hang — see Problem 1.
-- `kill -USR1 <pid>` dumps live thread stacks on demand.
-- Grad-clip (L2 norm 5.0) + NaN-guard in `trainer.py::train_step` skip
-  poisoned steps instead of nuking weights; watch `skipped_total`.
-- Per-iter `latest_buffer.npz` persistence means a crash doesn't lose
-  the buffer — resume with `--checkpoint
-  checkpoints/13x13_run1/checkpoint_NNNN.pt`.
-
-### 8. Post-run deliverables (mirror Phase 1)
-
-1. Keep every per-iter `checkpoint_NNNN.pt`. 60 iters × ~36 MB ≈ 2.2 GB
-   — trivial, and Phase 1 showed post-hoc weight-drift audits are
-   worthless without them.
-2. Run the round-robin Bradley-Terry tournament across every
-   checkpoint for the Elo curve (same pipeline as
-   `9x9_run2_tournament`).
-3. Append a "Run 1 — live training" section to **this file** and log
-   problems as they come up. That's the Phase 1 pattern and the main
-   reason this document was converted from the old `PHASE_TWO_TODO.md`
-   to `PHASE_TWO_TRAINING.md`.
-
----
-
-## Run 1 — live training
-
-### Attempt 1: aborted mid-iter-1 (2026-04-14 ~10:30–11:22 UTC)
-
-Launched the full 60-iter run at ~10:31 after v4 validated the config
-end-to-end. Iter 0 completed cleanly; iter 1 was killed at 76 % by
-Claude when the monitored `memory.usage_in_bytes` crossed the safety
-line. Iter 0 artifacts are preserved and resumable.
-
-**Iter 0 results (identical to v4 within noise):**
-
-| metric | value |
-|---|---:|
-| self-play time | 2426.8 s (40.5 min) |
-| total iter time | 2430.4 s |
-| games | 2048, positions 294,816 |
-| avg moves / game | 144 |
-| ticks | 61,851 @ 25.5 /s |
-| train loss | 5.974 (π=5.145, v=0.828) |
-| grad skips | 0 |
-| `checkpoint_0000.pt` | 36.5 MB ✓ |
-| `latest_buffer.npz` | 1.05 GB (294,816 positions) ✓ |
-
-Iter 0 self-play ran smoothly between **~22 GB and ~30 GB** cgroup
-`memory.usage_in_bytes`, matching v4. The `| sp:` progress log landed
-and is working as designed — 30 s cadence, clean format, ETA
-converging from noisy-early toward ~40 min real.
-
-### Problem 2 — `memory.usage_in_bytes` double-counts page cache
-
-**What happened.** Between the iter 0→1 boundary and iter 1 self-play,
-cgroup `memory.usage_in_bytes` climbed past v4's 31 GB steady state
-and accelerated:
+Run1 attempt 1 completed iter 0 cleanly, then iter 0→1 boundary saw
+cgroup `memory.usage_in_bytes` climb past v4's 31 GB steady state and
+accelerate:
 
 ```
 check         cgroup   peak     note
@@ -675,10 +407,10 @@ T+50 min      34.52 GB 34.55    +0.51 GB over 2 min (accelerating)
 abort window  -        35.02    crossed the line between checks
 ```
 
-I SIGTERM'd run1 at T+50:22 before iter 1's end-of-iter savez
+run1 was aborted at T+50:22 before iter 1's end-of-iter savez
 transient could fire — projected peak would have been 36–37 GB.
 
-**Post-kill diagnosis via `memory.stat`:**
+### Post-kill diagnosis via `memory.stat`
 
 ```
 cache:         2.57 GB   ← reclaimable page cache
@@ -693,111 +425,50 @@ expect from a ~1 GB `latest_buffer.npz` (written at iter 0 end and
 still hot in the cache) plus the inductor compile artifacts written
 during training.
 
-**The 35 GB limit is on `memory.usage_in_bytes`, which sums anon +
-cache**, and I was monitoring that. Cgroup v1's usage metric doesn't
-distinguish reclaimable cache from unreclaimable rss. The kernel would
-have reclaimed the cache under real memory pressure before OOM, but:
+**The 35 GB limit was monitored against `memory.usage_in_bytes`, which
+sums anon + cache.** Cgroup v1's usage metric doesn't distinguish
+reclaimable cache from unreclaimable rss. The kernel would have
+reclaimed the cache under real memory pressure before OOM, so ~3–5 GB
+of "memory pressure" on the dashboard was phantom reclaimable cache.
+**The real anon-memory peak was probably around 30–31 GB**, comfortably
+under any real hardware limit.
 
-1. The user's stated rule is based on the number they'd see (`usage`).
-2. I couldn't tell from live monitoring how much of the usage was
-   cache vs rss without parsing `memory.stat` every poll.
+### Resolution: raise operational ceiling, then re-measure
 
-So ~3–5 GB of "memory pressure" on the dashboard was phantom
-reclaimable cache. **The real anon-memory peak was probably around
-30–31 GB**, comfortably under any real hardware limit.
+A real cgroup audit during run1 recovery showed
+`memory.limit_in_bytes = 61.99 GB` with `oom_kill_disable=1` — the
+35 GB target was a self-imposed soft limit, not a real constraint.
+Decision: **raise operational ceiling 35 GB → 48 GB** (still 14 GB
+below the hard cap). Zero code changes, zero AI quality cost.
 
-### Options for Attempt 2
+A further re-measurement during run3 setup showed the current
+instance's cgroup v1 limit is actually **~87.5 GiB** (93,999,996,928
+bytes). Production peaks on run1/2 were ~40 GiB, leaving ~47 GiB
+headroom. The OOM problem is fully retired; everything from run3
+onward assumes the 87.5 GiB ceiling.
 
-Presenting these rather than choosing one autonomously. **Nothing has
-been retuned; v4's config is still checked into main.** Iter 0 is
-resumable from `checkpoints/13x13_run1/checkpoint_0000.pt`.
+### Other options that were considered but not taken
 
-1. **Drop page cache after every buffer.save_to** (~5 lines in
-   `replay_buffer.save_to`). `os.posix_fadvise(fd, 0, 0,
-   POSIX_FADV_DONTNEED)` immediately after `np.savez` + `fsync`.
-   Frees the 1 GB latest_buffer.npz from the cgroup cache count.
-   **Zero impact on AI quality or speed**; purely a memory-accounting
-   fix. **My preferred option.**
+- `posix_fadvise(POSIX_FADV_DONTNEED)` after `buffer.save_to` to drop
+  page cache (~5 lines) — unnecessary after the ceiling fix
+- Monitor `memory.stat: rss` instead of `memory.usage_in_bytes`
+- Lower `MAX_TREE_NODES` 1M → 500k (AI quality hit ~3 % → ~7 %)
+- Lower `num_parallel_games` 256 → 192
 
-2. **Monitor `memory.stat: rss` instead of `memory.usage_in_bytes`.**
-   Makes the abort rule fire on real anon-only pressure instead of
-   on cache-inflated usage. No code changes to training, just to the
-   monitoring script. Same abort budget of 35 GB but against a smaller
-   number, so effective headroom grows by ~3-5 GB. Risk: if the
-   user's 35 GB was a cgroup-wide concern (not just rss), this
-   violates the spirit of their rule.
+---
 
-3. **Lower `MAX_TREE_NODES` 1M → 500k.** Cuts MCTS peak from 19 GB to
-   9.6 GB, a 9.4 GB savings. Trades AI quality from ~3 % → ~7 %
-   convergence hit (~14 moves → ~7 moves between tree resets). Safe
-   but unnecessarily conservative if option (1) would suffice.
+# Section 3 — Fixing the regression issue
 
-4. **Lower `num_parallel_games` 256 → 192.** MCTS peak drops 19 → 14.4
-   GB. GPU batch drops 2048 → 1536, still well-utilized on a 4090.
-   Iter time impact small. Less aggressive than (3).
+The second-hardest part of Phase 2 — and the reason run1, run2, and
+run3 all had to be aborted before completing. The story here is
+**four wrong diagnoses before the right one**. This section is
+organized chronologically so each wrong hypothesis and its
+falsification are visible.
 
-5. **Combine (1) + (2).** Best-of-both: fix the cache accounting
-   issue AND switch to anon-only monitoring. Belt and suspenders.
+## Problem 3 — early-resign data bias (run1 iter 1)
 
-**Recommendation:** option (1) alone (or 1+2). v4's memory math was
-correct for real anon memory, the config is fine, and the only thing
-that went wrong was the 1 GB buffer file lingering in page cache. A
-trivial fix gets us back to running without touching the training
-config.
-
-**What I'm NOT doing autonomously:** picking one of these, rebuilding,
-relaunching. The user asked me to stop on anything uncertain, and
-this is exactly that. Iter 0 is safe, run1 dir is clean. Waiting for
-their decision.
-
-### Resolution: raise operational ceiling 35 GB → 48 GB
-
-The user came back, rejected the "sacrifice AI quality" options and
-asked for a real memory-limit audit. Results:
-
-```
-memory.limit_in_bytes    = 61.99 GB   ← real cgroup hard cap
-memory.memsw.limit       = 61.99 GB   (no swap)
-memory.kmem.limit        = unlimited
-oom_kill_disable         = 1          ← processes freeze, don't crash
-host MemTotal            = 528 GB     (container is tiny vs host)
-```
-
-The 35 GB target was a self-imposed soft limit, not a real constraint.
-The **real** wedge point is 62 GB, and `oom_kill_disable=1` means
-crossing it freezes the process rather than SIGKILL'ing it — so we'd
-see the failure in monitoring (tick rate drops to 0) before any
-unrecoverable damage.
-
-**Decision: raise operational ceiling 35 GB → 48 GB.** That's:
-- Covers all observed peaks (attempt 1 peaked at 35.02) with ~13 GB
-  slack
-- Still 14 GB of hard-limit headroom below 62 GB
-- Zero code changes, zero AI quality cost, zero speed cost
-
-No config tuning, no monitoring rewrite — just a corrected threshold
-that matches the actual container envelope.
-
-## Attempt 2 — resumed with 48 GB ceiling, aborted on early-resign
-
-### Run startup (2026-04-14 ~11:59 UTC)
-
-Launched via `--checkpoint checkpoints/13x13_run1/checkpoint_0000.pt`.
-Autotune was **~8× faster** than a cold launch (torch.compile
-artifacts cached from attempt 1 persisted in `/tmp`): self-play
-started by T+0.5 min instead of T+4 min.
-
-`train.py` resume messages landed as expected:
-
-```
-Resumed from iteration 0
-Restored replay buffer: 294816 samples from checkpoints/13x13_run1/latest_buffer.npz
-```
-
-Iter 1 self-play ran comfortably under 30 GB cgroup — the 48 GB
-ceiling was correct.
-
-## Problem 3 — early-resign data bias (iter 1)
+Date: **2026-04-14**. Status: **fixed** (`resign_min_move: 20 → 40`),
+but this was only the surface-level symptom of a deeper problem.
 
 ### Symptom
 
@@ -818,82 +489,46 @@ Iter    1 | Self-play: 2052 games, 84841 pos (41 avg moves), 2.7 games/s, buf=37
 | policy loss | 5.145 | 5.045 | −0.100 ✓ |
 | **value loss** | **0.828** | **0.903** | **+0.075 ⚠️** |
 
-**Value loss going UP while policy loss goes down is the exact
-fingerprint of the iter-4→19 regression on 9x9 run 1** — the trainer
-is fitting on positions whose value labels got flipped by early
-resign, so the value head learns noise while the policy head is
-still learning signal from visit distributions.
+Value loss going UP while policy loss goes down was the exact
+fingerprint of the iter-4→19 regression on 9x9 run 1 — the trainer
+was fitting on positions whose value labels got flipped by early
+resign.
 
-### Root cause
+### Root cause + fix
 
-On a fresh 15b×128ch net at iter 0, value outputs are near zero and
-resign never fires. After 100 training steps on 307k cold
-self-play positions, the value head has moved just enough for some
-positions to hit the `-0.90` threshold for 5 consecutive moves —
-early, at move ~25 (just above `resign_min_move=20`), and
-aggressively, because the credible-child cross-check requires a
-child with Q > `-0.90` **and** ≥ 5 % of root visits. Early in
-training, the policy is still nearly-uniform so visits spread across
-many children and no single child gets 5 % + a non-losing Q. The
-cross-check fires less often than intended on cold-ish nets.
+After 100 training steps on cold self-play data, the value head
+moved just enough for some positions to cross the `-0.90` resign
+threshold around move ~25 (just above `resign_min_move=20`). The
+credible-child cross-check (child with Q > −0.9 **and** ≥ 5% of root
+visits) didn't fire often enough to block it because on a cold-ish
+policy visits were spread too thin for any single child to hit 5%.
+Games cut off at move ~25–40 → buffer filled with early-game
+positions → value labels came from the resign decision itself →
+doom loop.
 
-**Effect on training data:** games cut off at move ~25-40. The
-replay buffer fills with early-game positions where the "true"
-value is ambiguous, and the labels come from the resign decision
-itself rather than from played-out games. Feedback loop:
+**Fix:** `resign_min_move: 20 → 40` on the 13x13 preset. 27 % of a
+typical 150-move 13x13 game, matching the 23 % (20/85) ratio that
+worked on 9x9 run 2. Config knob only.
 
-```
-early resign → short games → middle/endgame positions absent →
-value head trained on biased early-game labels →
-value head overconfident early → more resigns fire earlier →
-repeat
-```
+Attempt 3 resumed from `checkpoint_0000.pt` (iter 1's regressed
+checkpoint deleted, buffer trimmed back to iter 0's 294k positions,
+log truncated to iter 0 only).
 
-This is textbook what `PHASE_ONE_TRAINING.md` Problem 3 describes.
-
-### Fix
-
-`model/config.py` 13x13 preset: **`resign_min_move=20 → 40`**
-(override; default in `TrainingConfig` stays at 20 for 9x9 use).
-
-- 40 is 27 % of a typical 150-move 13x13 game, matching the 23 %
-  ratio (20 / 85) that worked on 9x9 run 2.
-- The hard move floor can't be side-stepped by the credible-child
-  check; it always blocks resign regardless of value confidence.
-- No code change, no rebuild, no AI quality loss. Config knob only.
-- Credible-child cross-check stays on as the second line of
-  defense once move 40 is passed.
-
-### Revert + resume plan
-
-Iter 1's `checkpoint_0001.pt` was trained on biased data; carrying
-it forward risks cementing the value-head confusion. Reverting run1
-state to the iter 0 baseline:
-
-- **delete** `checkpoint_0001.pt` (poisoned)
-- **trim** `latest_buffer.npz` from 379,657 → 294,816 positions
-  (iter 0's size, iter 1 entries at indices 294816+ simply
-  truncated — circular buffer invariants preserved, `size=index=294816`)
-- **truncate** `training_log.jsonl` to just the iter 0 line
-- **keep** `checkpoint_0000.pt` — that's the pre-bias weights we
-  resume from
-
-Then resume with the same `--checkpoint
-checkpoints/13x13_run1/checkpoint_0000.pt` command as attempt 2.
-Iter 1 now runs under `resign_min_move=40`; if games land in the
-~100–150 move range again, the fix worked.
-
-## Attempt 3 — resumed, ran 5 iters, catastrophic strength regression
+### Problem 3 was only a band-aid
 
 Attempt 3 resumed from `checkpoint_0000.pt` under the fix above. Iters
-0-4 all completed; memory behavior was healthy (peak ~43 GB cgroup,
-under the raised 50 GB ceiling). **But the first in-training
-`evaluate_vs_random` at iter 4 returned 5 %**, and a post-kill
-per-checkpoint audit showed the strength was **oscillating wildly**
-across every iter — the cleanest-ever diagnostic signal we've gotten
-on 13x13 training stability.
+0-4 all completed; memory behavior was healthy. **But the first
+in-training `evaluate_vs_random` at iter 4 returned 5 %**, and a
+post-kill per-checkpoint audit showed strength was **oscillating
+wildly** across every iter. The resign-floor fix stopped the
+immediate feedback loop but the underlying instability was still
+there — which became Problem 4 below.
 
-## Problem 4 — value-head cannibalization
+---
+
+## Problem 4 (wrong diagnosis v1) — "value-head cannibalization"
+
+Status: **initially shipped as `value_loss_weight=2.0`, later refuted**.
 
 ### Symptom
 
@@ -911,342 +546,80 @@ per checkpoint):
 
 Three signals, all pointing the same direction:
 
-1. **Strength oscillates wildly, not monotonically.** This is NOT the
-   Phase 1 run 1 fingerprint (which was a slow monotonic decline from
-   a working net). Here every iter is a crapshoot between "barely
-   viable" and "completely broken".
-
-2. **Policy loss drops monotonically** (5.145 → 4.820, -6.3 %), but
+1. **Strength oscillates wildly, not monotonically.** Every iter is a
+   crapshoot between "barely viable" and "completely broken".
+2. **Policy loss drops monotonically** (5.145 → 4.820, −6.3 %), but
    **value loss rises monotonically** (0.828 → 0.925, **+11.7 %**).
-   The trainer is making the policy head much better and the value
-   head much worse at the same time.
+3. **Win rate tracks value loss directly**.
 
-3. **Win rate tracks value loss directly**: iters where v_loss ≈ 0.90
-   score ~20 %, iters where v_loss ≈ 0.92 score 0–5 %. A 0.02-0.03
-   change in value loss swings strength by 15–20 percentage points.
+### Hypothesis at the time + fix
 
-### Root cause: equal-weight loss is ~80 % policy-driven
+`loss = policy_loss + value_loss` with equal weight meant policy
+(~5 cross-entropy) dominated value (~0.9 MSE) ~80:20 in the gradient.
+Theory: the value head was "under-trained," wandering on noisy
+targets. Standard "policy cannibalizes value head" framing.
 
-The trainer uses `loss = policy_loss + value_loss` with equal weight.
-But the two losses have very different natural magnitudes:
-
-- **`policy_loss`**: cross-entropy over 170 actions. Uniform baseline
-  is `log(170) ≈ 5.14`. A cold net sits right there, a trained net
-  drops to ~4.5-4.8. **Magnitude ~5.**
-- **`value_loss`**: MSE of scalar values in [-1, 1]. A net predicting
-  0 on all positions gets ~1.0 MSE against ±1 targets. **Magnitude ~0.9.**
-
-At equal weight in the summed loss, the total is ~80 % policy-driven,
-so the gradient SGD sees is ~5× more policy signal than value signal.
-The value head is **under-trained** — every SGD step, policy weights
-move a lot and value weights barely move. Over 100 train steps per
-iter, the value head drifts randomly on whatever noisy value targets
-the self-play happened to produce, without ever actually **learning**
-them.
-
-The oscillation mechanism:
-
-```
-1. iter N self-play produces positions + value targets (from game outcomes)
-2. trainer runs 100 SGD steps; policy head improves, value head
-   wanders in random direction
-3. iter N+1 self-play uses the wandered value head; MCTS leaf
-   evaluations are noisy → MCTS picks worse moves → produces worse
-   games → value targets are from a different distribution than iter N
-4. trainer sees a value-target shift; value head wanders again,
-   possibly back toward iter N's state, possibly further
-5. repeat
-```
-
-This is a standard failure mode in Zero training. LeelaZero,
-Katago, and the original AlphaZero all weight value loss higher
-than policy loss (coefficients between 1.0 and 1.5 on some
-implementations, explicit L2 regularization in AlphaZero itself).
-
-### Why 9x9 worked but 13x13 doesn't
-
-Phase 1 9x9 run 2 used the same `loss = policy + value` recipe and
-trained fine end-to-end. Three reasons 13x13 is more sensitive:
-
-1. **Bigger net (15b vs 10b)** — more capacity to overfit noisy value
-   targets.
-2. **Longer games (~150 vs ~85 moves)** — more positions where the
-   game outcome is still ambiguous, so value labels are noisier.
-3. **Larger board** — value evaluation is inherently harder because
-   territorial accounting scales roughly with board area.
-
-So a recipe that worked on a "forgiving" small-game/small-net setup
-collapses on a harder problem.
-
-### Fix: `value_loss_weight = 2.0` for 13x13
-
-New knob on `TrainingConfig`:
-
-```python
-# model/config.py
-@dataclass
-class TrainingConfig:
-    ...
-    value_loss_weight: float = 1.0   # default preserves 9x9 behavior
-
-# 13x13 preset override:
-value_loss_weight=2.0,
-```
-
-Trainer uses it:
-
-```python
-# trainer.py train_step
-loss = policy_loss + self.cfg.value_loss_weight * value_loss
-```
-
-**Why 2.0?** At that coefficient, value's contribution to the total
-is `2.0 × 0.9 = 1.8` vs policy's `5.0`, so policy:value split is
-~73 : 27 (vs the old 85 : 15). That's still policy-dominated, but the
-value head gets ~2× the gradient signal it was getting, enough to
-actually learn the targets.
-
-Not going higher (to e.g. 3.0) because:
-- AlphaZero's own published weight is closer to 1.0; 2.0 is already
-  a meaningful deviation from the canonical recipe.
-- Over-weighting value could swing the problem the other way (policy
-  head cannibalization).
-- If 2.0 still oscillates, the next lever is `train_steps_per_iter`
-  or `lr_init`, tested independently.
-
-Also enabling `eval_interval=1` on the 13x13 preset for the initial
-run2 so we see iter-by-iter strength and can catch any regression on
-iter 1 instead of waiting until iter 4. Once the strength curve is
-confirmed healthy, revert to a cheaper eval cadence (5-ish).
-
-### Smoke-test verification (2b×32ch tiny model)
-
-```
-Iter 0 | Train: loss=6.9982 (pi=5.1543, v=0.9220) | Eval: 75%
-Iter 1 | Train: loss=6.4426 (pi=5.0921, v=0.6753) | Eval: 60%
-Iter 2 | Train: loss=6.3165 (pi=5.0439, v=0.6363) | Eval: 60%
-```
-
-Arithmetic check: `5.1543 + 2.0 × 0.9220 = 6.9983` ≈ observed 6.9982
-(rounding) → **value_loss_weight is active**.
-
-Observations:
-- **Value loss drops monotonically** (0.922 → 0.675 → 0.636), reversing
-  the failing run1 trend.
-- **Policy loss also drops** (5.154 → 5.092 → 5.044), so we're not
-  cannibalizing policy to help value.
-- **Eval fires every iter** (eval_interval=1 works).
-- Eval win rate is noisy on 20 games + tiny model but **no strength
-  crash** from any iter to the next (75 → 60 → 60, not 75 → 2 → 60).
-
-Full 15b×128ch run2 is the real test.
-
-### What gets thrown away from run1
-
-run1's iter 1-4 data is contaminated and its weights are broken.
-Starting **run2 from scratch** (new `checkpoints/13x13_run2/` dir, no
-`--checkpoint`, no buffer reload). `checkpoint_0000.pt` is also not
-reusable because it was saved AFTER 100 train steps with the
-unweighted loss — its value head is already biased.
-
-The full per-iter run1 checkpoints and the strength_audit.txt stay
-on disk for post-mortem. PHASE_TWO_TRAINING.md's Problem 4 section
-(this one) is the write-up.
-
----
-
-## Starting run2 — fresh, value_loss_weight=2.0
-
-Commands for a clean launch with the new config:
-
-```bash
-mkdir -p logs checkpoints/13x13_run2
-nohup PYTHONPATH=engine python -m training.train \
-    --board-size 13 \
-    --iterations 60 \
-    --output-dir checkpoints/13x13_run2 \
-    > logs/13x13_run2.log 2>&1 &
-```
-
-**What to watch in iters 0-5 of run2:**
-
-- `value_loss` should drop monotonically (or at worst stay flat)
-  across iters. If it rises, the fix is insufficient.
-- `eval_vs_random` win rate should climb monotonically from the cold
-  baseline (~20 % on 13x13 cold). iter 1 should be ≥ iter 0, not
-  catastrophically lower.
-- `avg moves/game` should stay in the 100-160 range. Values below
-  80 indicate pass-loop or value-collapse from the old bug.
-- `cgroup memory` should plateau around ~40-44 GB (same as run1).
-
-If all four look healthy through iter 5, the 60-iter run is expected
-to complete in ~35-40 hours.
+Fix: new `value_loss_weight` config knob, **2.0 for 13x13**, and
+`eval_interval=1` for iter-by-iter visibility.
 
 ### Run 2 results — fix is partial, not sufficient
 
-Launched 2026-04-14 ~15:02 UTC, aborted after iter 1 completed
-(~T+1:17). Memory behavior was perfect — **plateau ~38-40 GB**,
-never crossed 41.4 during self-play, far under the 50 GB abort line.
-Problem 2 (memory) and Problem 3 (early resign) are both fully fixed.
+Launched 2026-04-14 ~15:02 UTC, aborted after iter 1 completed.
+Memory behavior was perfect. **But iter 1 showed the same value-head
+drift pattern as run1**, just at smaller magnitude:
 
-**But iter 1 showed the same value-head drift pattern as run1**,
-just at smaller magnitude:
-
-| metric | iter 0 | iter 1 | Δ | run1 Δ for comparison |
+| metric | iter 0 | iter 1 | Δ | run1 Δ |
 |---|---:|---:|---:|---:|
 | avg moves/game | 153 | 86 | −67 | −103 (144→41) |
 | policy_loss | 5.1346 | 5.0516 | −0.083 ✓ | −0.100 |
 | **value_loss** | **0.8723** | **0.9207** | **+0.048 ⚠️** | **+0.083 ⚠️** |
-| self-play time | 2552 s | 1202 s | shorter games → faster iter | — |
-| eval win rate | 1.0 % | 0.0 % | −1 pp | −18 pp (20→2) |
-| cgroup peak | ~37 GB | ~40 GB | normal | normal |
+| eval win rate | 1.0 % | 0.0 % | −1 pp | −18 pp |
 
 **`value_loss_weight=2.0` dampened the drift by ~40 %** (+0.048 vs
-run1's +0.083) but **did not reverse the direction**. The value head
-is still moving away from truth during iter 0→1 training, just more
-slowly. The policy→value cannibalization hypothesis is **partially
-validated**: a 2× weight helps, but not enough.
-
-**Secondary weird data point:** run2's iter 0 eval was **1 % vs run1's
-20 %** under identical-ish conditions. Both runs used random weights
-(no torch manual_seed), and the random-player evaluator uses
-unseeded `np.random`, so some of the 19 pp gap is attributable to
-eval variance. But 6σ of binomial variance is implausible — part of
-it has to be real. Most likely explanations:
-
-1. The 2.0 weighting pushed the first-iter trained weights further
-   from the cold init in a worse direction (the value head "trained
-   harder" on the noisy cold-self-play targets).
-2. Different random initial weights between the two runs.
-
-Either way, run2's absolute strength is worse than run1's at iter 0,
-and the iter 0 → iter 1 drift pattern is the same direction.
-
-### Aborting run2
-
-Aborted mid-iter-2 to stop wasting compute. Preserved:
-
-- `checkpoints/13x13_run2/checkpoint_0000.pt` (after iter 0)
-- `checkpoints/13x13_run2/checkpoint_0001.pt` (after iter 1, the
-  regressed state)
-- `checkpoints/13x13_run2/latest_buffer.npz` (1.74 GB, iter 1 end)
-- `checkpoints/13x13_run2/training_log.jsonl` (iters 0-1)
-- `logs/13x13_run2.log` (full stdout)
-
-Nothing committed to git except the `value_loss_weight=2.0`
-parameter change itself (which stays — it was still directionally
-correct, just insufficient).
-
-### What we learned from run1 + run2 combined
-
-The **oscillating-value-head** problem on 13x13 is deeper than a
-single loss-weight coefficient. Key observations across both runs:
-
-1. **Policy head trains fine.** Loss drops monotonically,
-   gradient magnitude is healthy.
-2. **Value head is unstable with the current recipe.** It drifts in
-   a DIRECTION that makes strength worse, and oscillates across
-   iters as MCTS data shifts under it.
-3. **Weight rebalancing helps but doesn't cure.** 2.0 was less
-   drift than 1.0, but still positive drift.
-4. **The instability is not the early-resign loop** — run2 with
-   `resign_min_move=40` still drifted, and the drift is visible
-   from iter 0 → iter 1 when self-play was perfectly normal
-   (153-move games on iter 0).
-
-The problem is **inherent to training on cold-self-play value
-targets with a 15b×128ch network at this batch size**. The value
-labels from cold-net games are noisy enough that any amount of SGD
-on them pushes the value head in a net-wrong direction. The
-oscillation happens because iter N+1's self-play produces a
-different noise distribution, so the drift direction changes each
-iter, but the magnitude stays.
-
-Several hypotheses for what would actually fix it, none validated
-on real data yet — these are the menu for tomorrow:
-
-- **Reduce `train_steps_per_iter` aggressively** (100 → 10 or 20).
-  Give the buffer time to accumulate diverse data before training
-  any significant amount. The very early iters have almost pure
-  cold-net data; training a lot on that data is what hurts.
-- **Use a warmup schedule for the value loss weight**: start
-  `value_loss_weight=0.5`, ramp to 2.0 over 5 iters. Lets the
-  policy learn first, then gradually turn on value training.
-- **Lower `lr_init` another 2-4×** (0.005 → 0.002 or 0.001). Cuts
-  per-step magnitude; over 100 steps this is equivalent to
-  reducing `train_steps_per_iter`.
-- **Different value loss function**: Huber instead of MSE.
-  Reduces impact of outlier value targets from early self-play.
-- **Batch normalization audit**: the running stats might be
-  specializing to iter N's distribution. Could try setting
-  `track_running_stats=False` or moving to GroupNorm / LayerNorm.
-- **Explicit torch seed** to make runs reproducible, so we can
-  actually compare apples to apples.
+run1's +0.083) but **did not reverse the direction**. The
+cannibalization hypothesis was **partially validated** — a 2× weight
+helped, but not enough.
 
 ---
 
-## Run 3 — offline A/B-driven recipe selection
+## Run 3 — offline-A/B-driven recipe selection
 
 Picked up the next session with a stricter approach: don't pick a
 lever blind, **measure every candidate against a real cold buffer
 first** and only commit a recipe with controlled-experiment evidence.
 
-### Step 1 — full code audit (no bug found)
+### Step 1 — code audit (no bug found)
 
-Before running any new training, audited every code path that
-touches the value target end-to-end:
-
-- **Sign convention** in `play_one_game` (`training/self_play.py`)
-  and the C++ `finish_game` (`engine/worker.h`): both flip the
-  game outcome to current-player perspective consistently.
-- **Observation encoding** in `Game::to_observation` (`engine/go.h`):
-  stone planes are `me`/`opp` from the current player's perspective,
-  matched by a color-to-play indicator on plane 16. Consistent with
-  the value target's perspective.
-- **Replay buffer 8-fold augmentation** (`replay_buffer.py`):
-  `value` is sym-invariant and correctly preserved through all 8
-  rotations/flips. uint8 cast is lossless for 0/1 obs cells.
-- **Train/eval mode plumbing**: `parallel_self_play.run_games()`
-  calls `self.net.eval()`, `trainer.train_step` calls
-  `self.net.train()`, `evaluate_vs_random` calls `net.eval()`. The
-  torch.compile wrapper respects mode changes on the underlying
-  module.
-
-**Verdict:** no hidden bug. The value-target pipeline is correct.
-The failure has to be in the optimization dynamics on this
-particular data distribution.
+Audited every path that touches the value target end-to-end: sign
+convention in `play_one_game` and C++ `finish_game`, observation
+encoding in `Game::to_observation`, replay buffer 8-fold augmentation,
+train/eval mode plumbing through `torch.compile`. Verdict: no hidden
+bug. The failure is in the optimization dynamics.
 
 ### Step 2 — offline A/B harness
 
-Wrote `training/_phase2_offline_ab.py`, a two-phase script:
+`training/_phase2_offline_ab.py`, two phases:
 
-1. **`gen-buffer`** — seeds RNGs (`SEED=42`), instantiates the real
-   13×13 net at random init, saves the cold weights, runs **256
-   cold self-play games** at production settings (15b×128ch, 400
-   sims, 5 workers) into a saved `.npz` buffer. ~12 min of
-   self-play, produces 28,253 positions, 108 avg moves, perfectly
-   balanced labels (+1 fraction 0.501, mean +0.001).
-2. **`run-ab`** — for each candidate recipe, reloads the **same**
-   cold weights and trains against the **same** buffer with that
-   recipe's hyperparameters. Records (a) held-out value MSE on a
-   5k-sample slice never used for training, (b) `below_resign_frac`
-   (fraction of held-out positions where the trained head outputs
-   v < −0.9, a direct proxy for triggering the resign loop in the
-   next iter), (c) value-head saturation rate (|v| > 0.95), (d)
-   first-5 vs last-5 training loss to see the per-step trajectory.
+1. **`gen-buffer`** — seeded RNGs, real 13×13 net at random init,
+   256 cold games at production settings → saved cold weights +
+   28,253 positions, balanced labels.
+2. **`run-ab`** — each recipe reloads the **same** cold weights and
+   trains against the **same** buffer. Records held-out value MSE
+   (5k-sample slice never seen in training), `below_resign_frac`
+   (fraction of held-out `v < −0.9`, proxy for triggering the iter-1
+   resign loop), value-head saturation rate, first-5 vs last-5
+   training loss trajectory.
 
-The per-recipe wall time is ~1–4 s on the 4090, so all 14 recipes
-finish in under a minute. The offline test is a **single-iter**
-simulation — it cannot capture iter-over-iter buffer evolution, but
-it IS faithful in per-position exposure (~8.5% buffer coverage per
-iter at production batch size, same in offline and production).
+The offline test is single-iter only — it cannot capture iter-over-
+iter buffer evolution — but it IS faithful in per-position exposure
+(~8.5% buffer coverage per iter).
 
 ### Step 3 — recipes tested and results
 
-Tested 14 recipes. Held-out MSE baseline (cold weights, no
-training) is **1.0035** — that's the "predict zero against ±1
-labels" floor. **Δv > 0 means the recipe made things worse on
-unseen positions.**
+Tested 14 recipes (10 MSE variants + 4 BCE/WDL-style). Held-out MSE
+baseline (cold weights, no training) is **1.0035** — the "predict
+zero against ±1 labels" floor. **Δv > 0 means the recipe made things
+worse on unseen positions.**
 
 ```
 recipe         pre_v  post_v       Δv   tr1st   trlst   sat  resign%
@@ -1268,141 +641,41 @@ B4-bce-vlw1   1.0035  1.7603  +0.7568  0.6855  0.0910  0.51    40.1%
 
 ### Step 4 — what the data says
 
-**Every single recipe has Δv > 0.** Pre-train cold MSE (1.0035) is
-literally the "always predict zero" floor. None of the 14 recipes
-pushed the value head into a state that GENERALIZED better than
-predicting zero on cold data.
+**Every recipe has Δv > 0.** Three distinct fingerprints:
 
-But the WAY they fail is informative. Three distinct fingerprints:
-
-1. **Catastrophic overfit fingerprint** — R1, R3, R4, R8, R9, R10:
-   training loss collapses to <0.1 (95% drop), held-out MSE jumps to
-   ~1.6, saturation 25–35%, `below_resign_frac` 15–25%. These
-   recipes train hard enough to memorize the 28k cold labels, then
-   produce confident wrong predictions on held-out positions. **R10
-   (value-only, zero policy gradient) is in this group with the
-   WORST numbers** — which kills the original "policy is
-   cannibalizing the trunk" hypothesis. The value head fails even
-   when nothing else is touching the trunk.
-
-2. **Under-train fingerprint** — R2, R7: training loss only drops to
-   ~0.27, held-out MSE only +0.11/+0.29, saturation 0%,
-   `below_resign_frac` 0%. The value head moves a tiny bit but
-   doesn't aggressively overfit. **These wouldn't trigger a doom
-   loop in iter 1** — that's what `below_resign_frac=0` means.
-
-3. **WDL/BCE is WORSE than MSE** — B1–B4: at 100 steps the BCE head
-   shows saturation **78%** (vs 25% with MSE), held-out **1.96** (vs
-   1.63), and `below_resign_frac` 33% (vs 21%). The intuition: MSE
-   gradient is bounded by 2 once `|v − target| = 1` (the loss for
-   predicting 0 against ±1 caps at 1.0), but BCE-with-logits keeps
-   pushing toward extremes regardless. On noisy ±1 labels, BCE
-   memorizes harder and produces MORE confident wrong predictions.
-   **WDL escalation is ruled out** — it would be strictly worse.
+1. **Catastrophic overfit** (R1/R3/R4/R8/R9/R10): training loss
+   collapses to <0.1 (95% drop), held-out jumps to ~1.6, saturation
+   25–35%. **R10 (value-only, zero policy gradient) is in this
+   group** — the WORST recipe — which kills the original
+   "policy is cannibalizing the value head" framing entirely. The
+   value head fails even when nothing else touches the trunk.
+2. **Under-train** (R2, R7): training loss only drops to ~0.27,
+   held-out +0.11/+0.29, saturation 0%, `below_resign_frac` 0%. The
+   value head barely moves.
+3. **WDL/BCE is WORSE than MSE** (B1–B4): at 100 steps BCE shows
+   saturation 78 % (vs MSE 25 %) and held-out 1.96 (vs 1.63). MSE
+   gradient caps at 2 once `|v − target| = 1`; BCE-with-logits keeps
+   pushing toward extremes. On noisy ±1 labels, BCE memorizes harder.
+   **WDL escalation is ruled out.**
 
 ### Step 5 — failure mode reframed
 
-The Phase 2 run1/run2 problem was diagnosed in the original
-narrative as "value-head cannibalization by policy gradient." The
-offline A/B refutes that:
+The "value-head cannibalization" story from Problem 4 is **refuted**:
+R10 (value-only) is the worst, not the best. Huber and warmup don't
+help. What does help (weakly) is reducing *exposure* (fewer steps).
 
-- **R10 (value-only)** has the worst Δv. If policy were stealing
-  the trunk, removing policy should help — instead it hurts.
-- **Huber and warmup don't help.** The drift isn't gradient-noise.
-- **Reducing steps DOES help** (R2 vs R1). The issue is
-  *exposure*, not gradient direction.
+The real failure mode is **classic overfit to noisy labels on a small
+cold buffer**. Cold-game outcomes are essentially random (50.1% black
+wins). The 4.5M-param network memorizes 28k random labels in <1
+epoch and produces confident wrong predictions on unseen positions.
 
-The real failure mode is **classic overfit to noisy labels on a
-small cold buffer**. Cold-game outcomes are essentially random
-(50.1% black wins!). A 4.5M-param network has more than enough
-capacity to memorize 28k random labels in <1 epoch and produce
-confident wrong predictions on unseen positions. Once those wrong
-predictions feed back into MCTS, MCTS picks worse moves, games
-get shorter (resigns trigger), the next iter trains on even worse
-data, and the doom loop kicks in.
+### Step 6 — Run 3 recipe and launch
 
-### Step 6 — escalation tree
-
-Three escalation paths, each addressing a different failure
-mechanism:
-
-| observed pattern | failure mechanism | escalation |
-|---|---|---|
-| value loss zigzags + saturation high | tanh+MSE gradient instability | **WDL head (Lc0)** — RULED OUT by B1-B4 |
-| simple fixes don't doom-loop but barely learn | sparse outcome-only supervision | **Ownership head (KataGo)** — 1 day |
-| simple fixes show slow positive trend | just slow convergence | **More iters / patience** |
-
-R2's offline behavior (no overfitting, no resigns, training loss
-DOES drop on the training set) is consistent with the "needs
-patience" branch — but a single-iter offline test cannot prove
-iter-over-iter bootstrapping will actually escape cold-start. That
-question can only be answered by a live multi-iter validation.
-
-### Step 7 — Run 3 recipe and launch
-
-Picked **R2** as the production candidate, with the **smallest
-possible code diff** so the change is auditable:
-
-```python
-# model/config.py — 13x13 preset
-train_steps_per_iter=30,   # NEW: was implicit 100 (default)
-# (value_loss_weight=2.0, lr_init=0.005, resign_min_move=40 unchanged)
-```
-
-```python
-# training/train.py — added a seed call at main() entry
-def set_all_seeds(seed: int):
-    import random as _random
-    _random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-# ...
-parser.add_argument("--seed", type=int, default=42)
-# ...
-set_all_seeds(args.seed)
-```
-
-That's the entire code change. **Huber, BCE, warmup, value-only,
-LR cuts — all rejected by the A/B.** The seed is for run-to-run
-reproducibility (run1 vs run2 had a 19pp eval gap at iter 0 partly
-because RNGs were unseeded).
-
-### Smoke test (143k-param tiny model, 3 iters)
-
-```
-Iter 0 | Train: loss=7.3174 (pi=5.2037, v=1.0569) | Eval 70%
-Iter 1 | Train: loss=7.1942 (pi=5.1852, v=1.0045) | Eval 70%
-Iter 2 | Train: loss=6.9419 (pi=5.1861, v=0.8779) | Eval 75%
-```
-
-Value loss drops monotonically (1.057 → 1.005 → 0.878). Eval
-non-regressing. Confirms the new config is wired and the seed
-machinery doesn't break anything.
-
-### Run 3 launch
-
-```bash
-cd /root/AI-ZeroToOne/Season-5/AlphaZero
-mkdir -p checkpoints/13x13_run3 logs
-PYTHONPATH=engine nohup python -m training.train \
-    --board-size 13 --iterations 60 \
-    --output-dir checkpoints/13x13_run3 \
-    > logs/13x13_run3.log 2>&1 &
-```
-
-### Memory budget on this instance
-
-Re-checked the cgroup limit because the previous narrative assumed
-62 GB. Actual:
-
-- Host total: 755 GiB
-- cgroup v1 limit: **93,999,996,928 bytes ≈ 87.5 GiB**
-- Production peak (run1/run2 measured): ~40 GiB
-- **Headroom: ~47 GiB** — far above the 46–48 GiB target
-
-No memory-budget edits needed for run3.
+Picked **R2** as the production candidate with the smallest possible
+diff: `train_steps_per_iter: 100 → 30` on the 13x13 preset, plus a
+`set_all_seeds()` call in `train.py` for run-to-run reproducibility
+(run1 vs run2 had a 19pp eval gap at iter 0 partly because RNGs were
+unseeded).
 
 ### Run 3 result — R2 falsified at iter 1
 
@@ -1418,97 +691,206 @@ normal but iter 1 immediately tripped two abort gates:
 | self-play wall | 2742 s | 814 s | −1928 s | confirms collapse |
 
 The iter-0 → iter-1 v_loss drift is **+0.083, identical in magnitude
-to run1's** +0.083 from the same pair of iters. Reducing
-`train_steps_per_iter` from 100 to 30 changed **nothing** about the
-direction or magnitude of the drift. Game length collapsed from 146
-to 56 moves the moment the trained net's value head crossed the
-resign threshold on enough positions.
+to run1's** +0.083 on the same pair of iters. **R2 decisively
+falsified:** iter-over-iter bootstrapping with under-training does
+NOT escape cold-start at this scale.
 
-**The R2 hypothesis is decisively falsified:** iter-over-iter
-bootstrapping with under-training does NOT escape cold-start at
-this scale. The offline A/B already showed every simple recipe has
-Δv > 0 on held-out cold data; the live test confirms that even the
-recipe with the smallest per-iter footprint still produces enough
-value-head drift to trigger the resign loop in one iter.
+Run3 checkpoints + buffer preserved for post-mortem in
+`checkpoints/13x13_run3/`.
 
-Preserved on disk for the post-mortem:
+### What the run3 work definitively ruled out
 
-- `checkpoints/13x13_run3/checkpoint_0000.pt` (iter 0 weights)
-- `checkpoints/13x13_run3/checkpoint_0001.pt` (iter 1 regressed)
-- `checkpoints/13x13_run3/latest_buffer.npz` (1.47 GB, end-of-iter-1)
-- `checkpoints/13x13_run3/training_log.jsonl`
+- Loss-formulation instability (WDL/BCE is worse than MSE)
+- Policy-trunk cannibalization (R10 value-only is the worst)
+- Huber loss (R4 matches R1)
+- LR alone (R5 reduces overfit but doesn't fix it)
+- Warmup (R9 is no better than R6)
+- `train_steps_per_iter` reduction alone (R2 fails live)
 
-### Hard go/no-go gate at iter 5
+---
 
-This is the discipline that makes "R2 first" defensible. R2's
-offline behavior justifies running it, but only briefly — pull
-the abort handle if iter 5 looks bad rather than burning 38h
-hoping.
+## Run 4 — KataGo-style ownership head + derived value
+
+Status: **launched 2026-04-15**, iter 0 in progress at time of writing.
+This is the architectural fix that addresses the actual root cause.
+
+### Diagnosis that led here
+
+The run3 A/B pinned the memorization to the **value head MLP** (FC
+169→256→1, ~44k params sitting on top of 28k cold training positions
+— ~1.6× overparameterized, trivial to memorize). Outcome-only
+supervision (one scalar per 150-move game) is too sparse to train a
+4.5M-param net at this scale.
+
+### First attempt: ownership head as auxiliary on top of existing value MLP
+
+Implemented the KataGo-style ownership head as a pure addition:
+
+- **C++** `Board::compute_ownership()` — Tromp-Taylor flood-fill
+  writing per-cell int8 labels (+1 BLACK / −1 WHITE / 0 dame).
+- **Worker** `finish_game` — computes ownership once at game end and
+  copies it into each MoveRecord with a current-player sign flip.
+- **Buffer** — new `ownership` tensor, 8-fold sym-aware augmentation,
+  save/load round-trip.
+- **Network** — `ownership_conv = Conv1×1(ch→1)` → `(B, N, N)` logits;
+  trained with BCE-with-logits against `(own+1)/2`.
+- **Trainer** — new `ownership_loss_weight` knob; total loss =
+  `policy_loss + vlw·value_loss + ow_weight·ownership_loss`.
+
+**First-pass offline A/B (10 recipes varying `ow_weight`, `vlw`,
+steps, LR):**
+
+```
+recipe          pre_v  post_v       Δv  tro_1st  tro_lst   sat  resign%
+OW0-baseline   1.0035  1.6342  +0.6307   0.0000   0.0000  0.25    21.0%
+OW0.5-100      1.0035  1.5538  +0.5502   1.0132   0.5625  0.30    25.2%
+OW1.0-100      1.0035  1.5819  +0.5784   0.9687   0.5425  0.29    20.0%
+OW1.5-100      1.0035  1.6103  +0.6068   0.9613   0.5310  0.29    25.3%
+OW1.5-30       1.0035  1.1990  +0.1955   0.9613   0.5781  0.00     0.0%
+OW1.5-200      1.0035  1.4980  +0.4945   0.9619   0.5345  0.29    24.6%
+OW1.5-vlw1     1.0035  1.5260  +0.5225   0.9613   0.5310  0.28    11.9%
+OW1.5-lowLR    1.0035  1.3300  +0.3264   0.9614   0.5920  0.00     2.3%
+OW2.0-100      1.0035  1.5791  +0.5755   0.9616   0.5248  0.32    17.0%
+OW3.0-100      1.0035  1.6021  +0.5986   0.9632   0.5155  0.31    15.8%
+```
+
+- **Ownership head IS learning** — training ownership loss drops
+  0.96 → 0.54 in every recipe, held-out drops 0.69 → 0.55.
+- **But every recipe still has post_v_mse > 1.0.** Ownership trains
+  the trunk fine; it doesn't stop the value MLP from memorizing
+  independently.
+
+A second pass focused on `steps=30 + low vlw + ownership` showed the
+same pattern. The only recipe that ever stayed at the cold floor was
+**A6 (`vlw=0`, ow=2.0)** — because with `vlw=0` the value MLP never
+updated at all. Not a fix, but a definitive pin: the memorization
+is in the value MLP, not the trunk or the ownership head.
+
+### Second attempt: derive value from ownership (no independent value MLP)
+
+The decisive architectural change. **Replace the value MLP entirely**
+with a deterministic readout of the ownership head:
+
+```python
+# Old value head (~44k params, memorized 28k cold labels in <1 epoch):
+value = tanh(fc2(relu(fc1(bn(conv(trunk))))))
+
+# New value head (2 learnable scalars, can't memorize anything):
+own_logits = ownership_conv(trunk)              # (B, N, N)
+own_probs  = sigmoid(own_logits)                # (B, N, N)
+own_signed = 2 * own_probs - 1                  # (B, N, N) in [-1, 1]
+margin     = own_signed.sum((1, 2))             # (B,) expected net cells
+value      = tanh(value_scale * margin + value_bias)
+# value_scale, value_bias are nn.Parameter(), init (0.02, 0.0)
+```
+
+**Properties of the new architecture:**
+
+- The "value head" has exactly **two learnable scalars** (`value_scale`,
+  `value_bias`). Cannot memorize 28k labels by any mechanism.
+- Value is **mathematically bound** to ownership. The network can only
+  produce a value prediction that's consistent with its ownership
+  prediction, and ownership has 169 dense per-cell real-territory
+  labels per position.
+- Value loss gradients still flow back into the ownership head and
+  the trunk (via sigmoid, sum, tanh), so value supervision is not
+  lost — it's rerouted through a structure that can't overfit.
+- This is the KataGo "value-from-score" idea in its simplest form.
+  KataGo has both a direct value head AND a score-derived one and
+  combines them; we have only the score-derived one.
+
+### Offline A/B on the derived-value architecture
+
+Reran the same 10 recipes from the second pass against the new
+architecture:
+
+```
+recipe               post_v       Δv   sat   resign%
+A0-OW0-baseline      1.4878  +0.4660  0.61    11.7%   ← ow=0, vlw=2
+A1-OW1.5-30-anchor   1.9776  +0.9558  0.52    43.1%   ← ow=1.5, vlw=2 (WORST)
+A2-30-vlw0.5-ow1.5   1.4642  +0.4424  0.14    25.1%
+A3-30-vlw0.5-ow2.0   1.7370  +0.7152  0.60    47.2%
+A5-30-vlw0.25-ow2.0  1.5452  +0.5234  0.29     0.0%
+A6-30-vlw0-ow2.0     0.9631  −0.0586  0.00     0.0%  ★ below floor
+A7-50-vlw1-ow1.5     1.8052  +0.7835  0.71    34.5%
+A8-50-vlw0.5-ow2.0   1.8570  +0.8352  0.77    42.8%
+A9-30-vlw0.5-lowLR   1.3698  +0.3480  0.01     6.1%
+```
+
+**A6 broke the floor** (post_v_mse = **0.9631** < 1.02, **Δv = −0.059**,
+**resign% = 0%**, **saturation = 0%**). This was the **first recipe
+across run1/2/3/4 offline A/Bs to ever produce negative Δv on
+held-out data**.
+
+**Critical subtlety**: the pattern in this table is the opposite of
+the pattern with the old MLP architecture. Now **any nonzero value
+loss weight HURTS**: A1 (`vlw=2`, ow=1.5) has the worst result (Δv =
++0.96) because with the derived value, value-loss gradients flow back
+through sigmoid/sum into the ownership head — directly **hijacking it
+into making per-cell predictions that sum to noisy game outcomes**,
+which conflicts with the ownership loss's "predict real territory"
+supervision. `vlw=0` removes the conflict entirely.
+
+With `vlw=0`:
+- The ownership loss alone trains the ownership head and the trunk
+  on dense per-cell real-game labels.
+- `value_scale=0.02` and `value_bias=0` never update.
+- The derived value is a **frozen deterministic readout** of a
+  well-trained ownership head.
+- For 13x13, `scale=0.02` is a reasonable calibration: `tanh(0.02 ×
+  ±50)` ≈ ±0.76, and ±100 approaches saturation — fine dynamic range.
+
+### Run 4 recipe
+
+Three config changes from the run3 state:
+
+```python
+# model/config.py — 13x13 preset
+value_loss_weight=0.0,          # was 2.0 — removes the hijack of ownership head
+train_steps_per_iter=30,        # was 100 — prevents per-iter overfit
+ownership_loss_weight=2.0,      # new; KataGo-range supervision weight
+```
+
+Plus the derived-value architecture in `model/network.py`: the old
+`value_conv`/`value_bn`/`value_fc1`/`value_fc2` modules are **removed**
+entirely; replaced by `value_scale` and `value_bias` as
+`nn.Parameter()`.
+
+### Smoke test (tiny 2b×32ch, 3 iters)
+
+```
+Iter 0 | loss=6.5736 (pi=5.2012, v=1.2104, own=0.6862) | Eval 75%
+Iter 1 | loss=6.3388 (pi=5.1813, v=0.9308, own=0.5788) | Eval 75%
+Iter 2 | loss=6.2620 (pi=5.1567, v=1.0404, own=0.5526) | Eval 65%
+```
+
+Arithmetic `5.2012 + 2·0.6862 = 6.5736` ✓ (`vlw=0`, `ow=2` both
+active). Ownership loss drops monotonically past the 0.693 entropy
+floor. Derived value reported (not in total): 1.21 → 0.93 → 1.04.
+
+### Hard go/no-go gate at iter 5 (same as run3)
 
 **GREEN** (let the full 60 iters run unattended ~38h):
-- `value_loss` flat-or-falling across iters 0→5
+- `value_loss` flat-or-falling across iters 0→5 (the reported
+  derived-value MSE, even though it's not in the total loss)
 - `eval_vs_random` non-regressing AND ≥ ~10–15 % by iter 5
 - `avg_moves/game` stays in the 100–160 range (no resign collapse)
 - cgroup memory stable, well under 60 GB
 
-**RED** (kill, escalate to ownership-head implementation):
+**RED** (kill, re-evaluate):
 - `value_loss` rising 2 iters in a row
 - `eval_vs_random` stuck near 0 % for 3 consecutive iters past iter 2
 - `avg_moves/game` < 80
 - any crash / OOM
 
-### Next escalation if R2 fails: KataGo ownership head
+### Things still untested (post-run4)
 
-If iter 5 is RED, the next-and-only escalation is a **per-cell
-ownership auxiliary head** à la KataGo. Rationale:
-
-- Outcome-only supervision (1 scalar label per ~150 moves of game)
-  is the documented failure mode at this net size. KataGo
-  specifically built ownership to address it on 19×19; we're in the
-  same regime.
-- Per-cell ownership gives **169× more supervision per position**
-  (one binary label per cell, computed from final board territory
-  via Tromp-Taylor). The trunk is forced to learn spatial features
-  that generalize.
-- David Wu's paper claims ~50× learning speedup on 19×19 from this
-  single change.
-
-**Implementation sketch (~1 day of work):**
-
-1. **C++ side** — track per-cell final ownership at game end in
-   `worker.h::finish_game`, write into `MoveRecord`, harvest
-   alongside obs/policy/value.
-2. **Buffer schema** — add `ownership: uint8 (capacity, N, N)`
-   alongside the existing tensors. Augment under the same 8-fold
-   symmetry as obs.
-3. **Network** — add second conv1×1(ch→1) head, sigmoid,
-   per-cell BCE loss vs ownership target.
-4. **Trainer** — add `aux_loss_weight` (start at ~0.1), add
-   ownership term to total loss.
-5. **Re-run cold buffer + offline A/B** with ownership enabled to
-   validate before launching another live run.
-
-WDL escalation is **explicitly ruled out** — the BCE recipes in
-this A/B prove WDL would be strictly worse than the current MSE
-recipe.
-
-### Things the offline A/B definitively ruled out
-
-- Loss-formulation instability (BCE/WDL is worse, not better)
-- Policy-trunk cannibalization (R10 value-only is the worst recipe)
-- Huber as a fix (R4 looks identical to R1)
-- LR alone as a fix (R5 reduces overfitting but doesn't fix it)
-- Warmup as a fix (R9 is no better than R6 at vlw=0.5)
-
-### Things still untested (saved for after R2 verdict)
-
-- KataGo ownership head (the real escalation if R2 fails)
-- Score-distribution head (KataGo's secondary innovation; only
-  worth adding on top of ownership)
-- 9×9 → 13×13 weight transfer / supervised pretraining (handover
-  fallback; ~1 day of architecture-transfer code, only worth doing
-  if both R2 AND ownership head fail)
-- Two-tower (separate trunks for policy and value): refuted by the
-  R10 value-only result, no longer interesting
+- **Score-distribution head** (KataGo's secondary innovation; only
+  worth adding on top of ownership if run4 plateaus early)
+- **9×9 → 13×13 weight transfer / supervised pretraining** (~1 day of
+  architecture-transfer code, worth doing only if run4 fails outright)
+- **Learnable value_scale/value_bias**: currently `vlw=0` means they
+  never update; could try training them with a tiny weight (e.g.
+  `vlw=0.05`) once ownership is well-trained, for calibration
 
 ---
