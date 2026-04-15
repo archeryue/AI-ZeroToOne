@@ -143,14 +143,19 @@ CONFIGS = {
             # iter-4→19 regression; run 2 at 0.005 was stable. Cheap
             # insurance on a bigger net (15b vs 10b) and a bigger game.
             lr_init=0.005,
-            # Raised from the 20 default after run1 iter 1 saw games
-            # collapse to 41 avg moves (vs iter 0's 144) and value loss
-            # rise 0.83 → 0.90 — classic early-resign data bias. On a
-            # 13x13 game with max_game_moves=250, a move floor of 40 is
-            # ~27% of a typical 150-move game, matching the proportion
-            # the 9x9 run 2 fix used (20/85 ≈ 23%). Credible-child
-            # cross-check stays on as the second line of defense.
-            resign_min_move=40,
+            # Raised 40 → 80 and threshold -0.90 → -0.95 after run4b
+            # iter 2 resumed and produced ~50 avg moves/game from an
+            # iter-1-trained checkpoint (vs iter 0/1 at 173/182). The
+            # ownership head, after 60 cumulative SGD steps, is
+            # confident enough that tanh(0.02 · Σ(2σ(own)−1)) sometimes
+            # crosses −0.9 at move 40+, triggering resigns that bias
+            # the buffer toward short games. -0.95 requires much more
+            # confident losing predictions; move-floor 80 ≈ 45 % of a
+            # typical 180-move 13x13 game so resign can only fire past
+            # the midgame. Credible-child cross-check stays on as the
+            # second line of defense.
+            resign_min_move=80,
+            resign_threshold=-0.95,
             # value_loss_weight=0.0 for run4 — this is NOT the same
             # "turn off the value head" as old runs; it only disables
             # the direct value-loss gradient. Value is now DERIVED
