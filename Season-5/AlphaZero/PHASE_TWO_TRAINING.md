@@ -1067,3 +1067,116 @@ Success criterion at iter 1: **eval ≥ 60 % vs random** (keeps or improves iter
 3. **`num_games_per_iter` directly trades iter wall-time for per-iter data volume.** Cutting 2048 → 1024 halved iter time and roughly halved the crash-recovery cost without visible quality impact so far (training samples from the full 1M buffer regardless).
 4. **Intra-iter buffer persistence + shell watchdog + shrunken MCTS footprint survived the run4b silent-kill regime.** Even when a real SIGSEGV hit, the watchdog resumed from the last checkpoint with partial iter data preserved.
 5. **Pass gating must cover the stored target, not just the sampled action.** Any auxiliary constraint that blocks an action in self-play must also remove it from the policy training target for the same positions, otherwise the net learns the forbidden action is "valid" via the MCTS visit distribution even when it can't actually be played.
+
+# Section 5 — Run 4d: v2 fix validated, strength drift discovered
+
+Continuation of §4. Section 4 ended with run4d launching from `checkpoint_0000.pt` with the v2 target-zero fix and `--games-per-iter 1024`. This section records what actually happened.
+
+## Problem D — setup.py header-dependency bug (rework)
+
+The first run4d attempt silently ran on the **v1 engine**, not the v2 engine I thought I'd built. Root cause:
+
+- I edited only `engine/worker.h` for the v2 fix (zero `rec.policy[pass]` before `push_back`).
+- `setup.py build_ext --inplace` only tracks `.cpp` file mtimes, not the headers they include.
+- No `.cpp` changed, so setup.py skipped the rebuild and just re-copied the existing `.so` from `build/`.
+- The `.so` timestamp was **09:20** (the v1 rebuild time), but `worker.h` was **12:44**. I should have caught this by mtime check before launch; I did not.
+
+**Symptom that exposed the bug**: iter 1 eval produced `pass_prob=2.43 %` (worse than v1-engine run4c iter 1's 1.77 %). That contradicted my expectation for v2 (pass_prob should be *lower* than iter 0's 1.09 %). A quick `ls -la engine/*.so engine/worker.h` showed the `.so` was older than the header.
+
+**Fix.** `rm -rf engine/build engine/*.so && python setup.py build_ext --inplace` from inside `engine/`. Forces a full rebuild of all four `.cpp` files. After this, `.so` mtime was 13:31 (newer than `worker.h` 12:44), confirmed pybind exposes `pass_min_move`, runtime config shows `13x13 preset pass_min_move=60`.
+
+**Takeaway for the next session.** After every `engine` source edit, verify the `.so` mtime is newer than every edited file before running anything that loads the engine. Two-second check, saves an hour. Better: add an explicit timestamp-dependency on `*.h` files in `setup.py` — or just `rm -rf build *.so` before every rebuild.
+
+## Run 4d v2 — launched clean from iter 0
+
+After the engine rebuild, deleted the v1-polluted `checkpoint_0001.pt` (iter 1 of the buggy run4d attempt 1) to `checkpoints/13x13_run4d_v1_polluted_iter1/` and relaunched from `checkpoint_0000.pt` with a **fresh buffer** and the **verified** v2 engine.
+
+### Per-iter trajectory
+
+Watchdog attempt 1 segfaulted at 1502 s during iter 1 self-play (~62 % done). Intra-iter buffer persistence preserved ~170k partial positions. Attempt 2 resumed from `checkpoint_0000.pt` with the buffer reloaded and completed iter 1 on top of the preserved partial harvest.
+
+| iter | avg_moves | pi_loss | v_loss | own_loss | vs-random | pass_argmax | pass_prob |
+|---:|---:|---:|---:|---:|---:|:---:|---:|
+| 0 | 173 | 5.1689 | 0.9942 | 0.6024 | **72.0 %** | pass (169) | 1.087 % |
+| 1 | 234 | 5.0381 | 0.8869 | 0.4865 | 36.0 % | pass (169) | 0.781 % |
+| 2 | 123 | 4.9880 | 0.9288 | 0.4894 | 66.0 % | pass (169) | 0.667 % |
+| 3 | 149 | 4.9873 | 0.9621 | 0.4880 | 56.0 % | **44 (real move!)** | 0.612 % |
+| 4 | 172 | 4.9694 | 0.9776 | 0.4839 | 42.0 % ⚠️ | **129 (real move)** | 0.602 % |
+
+### What v2 fixed (definitively)
+
+1. **pass_prob is monotonically decreasing** across iter 0→4 (1.087 % → 0.602 %). In the v1-engine run it grew 1.09 % → 10.27 % over 5 iters and the strength catastrophically collapsed; in v2 it shrinks. The fix is working as designed.
+2. **Policy argmax on empty board is no longer pass** starting at iter 3. For the first time across the entire Phase 2 project, the trained net's preferred opening move is an actual stone placement. This is the hard signal that MCTS won't collapse eval games into immediate pass-pass.
+3. **Avg moves/game recovered** from iter 2's 123 back to iter 4's 172, essentially matching iter 0's natural 173-move baseline. Games are healthy.
+
+### What v2 did NOT fix — the real remaining problem
+
+**Strength regression from iter 0's 72 % vs random.** The measured trajectory is a V-shape followed by a downward drift:
+
+```
+72 % → 36 % (iter 1 shock)
+     ↘ 66 % (iter 2 recovery)
+       ↘ 56 % (iter 3)
+         ↘ 42 % (iter 4)  ⚠️  drifting down even though pass_prob is healthy
+```
+
+Statistical significance: 50 games per eval → binomial SE at p=0.5 is 7.1 pp. iter 2 (66 %) and iter 4 (42 %) are **not** within each other's 95 % CI, so the drift is probably real and not just noise.
+
+**This is the real, un-diagnosed problem.** The training losses are all healthy (pi drops 5.1689 → 4.9694, own drops 0.6024 → 0.4839, v fluctuates around 0.9-1.0), yet real strength against random drifted from 72 % → 42 % over 4 iters. Training loss is again **not predictive of strength** — the same pattern that bit us in the v1 run, just expressed differently (a gentle drift here instead of a collapse).
+
+### Candidate hypotheses for the remaining regression (untested)
+
+1. **BN moving-stat drift.** Every iter of self-play → training updates BN running means/vars toward the current self-play distribution. Over iters, the distribution shifts (longer games, different opening positions, different policy priors), and BN stats chase it. At eval time (random opponent, different opening distribution) the BN stats are calibrated for the wrong input distribution. Fix candidates: lower BN momentum, or freeze BN stats once strength is validated, or replace BN with GroupNorm.
+2. **LR too high for derived-value architecture.** `lr_init=0.005` with cosine schedule is still near 0.005 at iter 4. Each 30-SGD-step iter can overshoot slightly, and the errors compound. Fix: halve to 0.0025 or quarter to 0.00125.
+3. **Ownership loss gradient destabilizing the shared trunk.** `ow_w=2.0` is aggressive — the ownership gradient can be 10× larger than the policy gradient on early-game positions where ownership is hard (unclear territory). Pulling the trunk toward "predict territory" hurts "predict good moves". Fix: lower `ow_w` to 1.0 or 0.5, or separate the policy head from the trunk earlier.
+4. **Value-from-ownership still noisy.** The derived value is `tanh(0.02 × Σ(2σ(own) − 1))` — a single scalar path through the trunk. Even with `vlw=0`, the derived value shows up in MCTS rollouts and affects which moves get visited. If ownership predictions are noisy early, MCTS leaf evaluation is noisy, PUCT selects poor moves, the training target for policy is poor, and the net overfits to bad targets. Fix candidates: increase `num_simulations` (more averaging), add direct value loss at small weight, or clip derived value.
+
+### What I did NOT try (deferred to next session per user)
+
+- **Resign recipe rework.** `resign_threshold=-0.95, resign_min_move=80` is still in config but hasn't been load-bearing since the pass-fix. The pass-floor gate at move 60 prevents the "pass-collapse" that motivated the resign tuning in the first place. The next session is expected to revisit resign + value-loss together.
+- **`value_loss_weight` retune.** Currently `vlw=0` per run4's decision (derived-value architecture, direct value gradient hijacks the ownership head). The iter 1/4 drift suggests the derived-value path is not sufficient on its own — reintroducing a small direct value loss (`vlw=0.05–0.1`) may stabilize the trunk without triggering the memorization problem that killed run 1–3.
+- **BN → GroupNorm swap.** Biggest hammer, untested at this scale.
+
+## Current disk state
+
+```
+checkpoints/13x13_run4b/
+  checkpoint_0000.pt   iter 0, 72 % vs random  ← best overall
+  checkpoint_0001.pt   iter 1, 36 %  (v2 engine, run4d-v2 attempt 2)
+  checkpoint_0002.pt   iter 2, 66 %  ← second-best
+  checkpoint_0003.pt   iter 3, 56 %
+  checkpoint_0004.pt   iter 4, 42 %  ← drifting
+  latest_buffer.npz    ~1M position buffer, iter 4 state
+  training_log.jsonl
+
+checkpoints/13x13_run4b_contaminated_iter1-5/
+  (v1-engine pollution run — post-mortem archive)
+  checkpoint_0001..5.pt, latest_buffer.npz, training_log.jsonl
+
+checkpoints/13x13_run4d_v1_polluted_iter1/
+  (v1-engine pollution from the second time, rebuild-bug)
+  checkpoint_0001.pt, latest_buffer.npz, training_log.jsonl
+```
+
+`checkpoint_0002.pt` (66 %) is the best resume point for the next session if starting from a "post-pass-fix" baseline. `checkpoint_0000.pt` (72 %) is the strongest overall and is the cleanest point to rerun from if the next fix requires re-evaluating from iter 0 baseline.
+
+## Scripts and infrastructure landed this session
+
+- **`run_resilient.sh`** — shell watchdog for `train.py`, auto-resumes from latest checkpoint on non-zero exit. Handles segfaults. Survived both the silent-kill regime and real SIGSEGVs. MIN_RUNTIME_S guard blocks deterministic crash loops. SIGINT/SIGTERM pass-through.
+- **`run_eval_loop.sh`** — background watcher that runs 50-game eval-vs-random on each new `checkpoint_NNNN.pt`, one fresh Python subprocess per checkpoint (avoids the accumulation hang). Results: `logs/eval_vs_random.log` (one line per iter).
+- **`run_pass_prob_check.sh`** — early-warning that scores the policy argmax + pass_prob on an empty board per checkpoint. Results: `logs/pass_prob.log`. Would have caught the v1-engine pass-bias drift within 2 iters if I'd been running it during run4c.
+- **Intra-iter buffer persistence** in `parallel_self_play.run_games` (`save_callback` every 120 s). Preserved partial self-play across the run4d attempt-1 segfault (170k positions retained).
+- **Pass-fix v2** in `worker.h::complete_move`: zero `rec.policy[ACTIONS-1]` and renormalize non-pass mass before `push_back` when `move_num < pass_min_move`. Stored training target + sampled action both gated.
+- **`num_parallel_games` 256 → 128** on 13×13 preset. Halves MCTS state to ~10 GB peak, removed us from OOM-kill top-candidate range. No silent kills after this change.
+
+## Decision state for tomorrow
+
+**Training is stopped.** Nothing running. Watchdog, eval loop, pass-prob loop all stopped. GPU clear.
+
+**Open questions to resolve next session:**
+
+1. What causes the strength drift even when pass is no longer the argmax? (BN? LR? ow_w?)
+2. Should we reintroduce a small direct `value_loss_weight` (e.g. 0.05) to stabilize the trunk, or trust derived-value alone?
+3. What resign recipe is actually correct given that the pass-collapse path no longer needs resign as a band-aid?
+
+**The session ending snapshot is committed to main** (this section) so you can pick up tomorrow with the full trail of what was tried, what worked, and what's still broken.
