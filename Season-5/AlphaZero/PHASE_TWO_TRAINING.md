@@ -883,7 +883,91 @@ floor. Derived value reported (not in total): 1.21 → 0.93 → 1.04.
 - `avg_moves/game` < 80
 - any crash / OOM
 
-### Things still untested (post-run4)
+### Run 4 — first attempt died silently mid-eval
+
+Launched at 04:56 UTC. Iter 0 self-play ran cleanly for ~52 min
+(2050 games, 355,569 positions, 173 avg moves — longer than run3
+because the derived value is flat at cold init so resign never
+fires). `buffer.save_to()` successfully wrote `latest_buffer.npz`
+(1.32 GB). Then the process **vanished silently around 05:51** with:
+
+- no Python traceback
+- no `TRAINING CRASHED` from the `BaseException` handler
+- no core dump
+- no cgroup OOM (`memory.failcnt=0`, `oom_kill=0`)
+- the iter 0 summary line was never flushed to the log (Python
+  block-buffers `nohup`-redirected stdout by default)
+
+Most likely cause: **external kill on a shared host** (host load
+average was 6.21 at the time — other processes contending for
+memory, and we were at ~30 GB RSS). No cgroup mechanism prevents
+the kernel OOM killer targeting a high-RSS container when the
+global system is under pressure. The `oom_kill_disable=1` flag only
+applies to the cgroup's own OOM path.
+
+Unable to prove it was an external kill vs a subtle bug with the
+available logs, so I made the training loop **more resilient and
+observable** before relaunching. Three train.py changes (commit
+`ac7751d`):
+
+1. **`PYTHONUNBUFFERED=1` launch env + `flush=True` on every
+   iter-loop print.** Guarantees output hits disk immediately; a
+   crash can't bury the iter summary in a stdout buffer.
+2. **Reorder loop: checkpoint BEFORE eval.** Run4 died during eval
+   AFTER training completed, losing the trained weights for no
+   reason. Save first so a crash mid-eval still preserves the
+   checkpoint for post-hoc audit / resume.
+3. **Drop eval `num_games` 100 → 50.** Halves eval wall time
+   (~5 min → ~2.5 min) to shrink the window where an external kill
+   can hit. Statistical cost tiny: binomial σ at p=0.15 is ±5pp on
+   50 games vs ±3.6pp on 100.
+
+None of these touch what the network learns; they only harden the
+training loop against the specific failure mode run4 hit.
+
+### Run 4b — relaunched, iter 0 broke every prior baseline
+
+Launched at 06:13 UTC. Iter 0 completed cleanly at **~54 min**
+total. **This is the first iter 0 across run1/2/3/4b where all
+four signals land above (or at) the best previously-seen value:**
+
+```
+Iter 0 | Self-play: 2050 games, 355569 pos (173 avg moves), 3115.8s
+       | Train: loss=6.3737 (pi=5.1689, v=0.9942, own=0.6024), 0.9s
+       | Checkpoint saved: checkpoints/13x13_run4b/checkpoint_0000.pt
+       | Eval vs random: 60.0% (50 games, 129.7s)
+       | Total: 3254.1s
+```
+
+| | run1 | run2 | run3 | **run4b** |
+|---|---:|---:|---:|---:|
+| iter 0 eval vs random | 20 % | 1 % | 15 % | **60 %** |
+| avg moves/game | 144 | 153 | 146 | 173 |
+| self-play time | 40.5 min | 42.5 min | 45.7 min | 52 min |
+| value loss (iter 0) | 0.828 | 0.872 | 0.882 | 0.9942 (derived) |
+| ownership loss | — | — | — | **0.6024** |
+
+**The 60 % eval number is 3× the best previous iter-0 baseline.** 50
+games has a binomial 95 % CI of ±14 pp, so the true win rate could be
+as low as ~46 % — still higher than any prior run's iter 0.
+
+Arithmetic check on the train line: `5.1689 + 0·0.9942 + 2.0·0.6024
+= 6.3737` ✓ (confirms `vlw=0`, `ow=2.0` active). The `v_loss=0.994`
+sitting at the cold floor confirms the 2-learnable-scalar derived
+head is NOT memorizing — exactly what the architecture was designed
+to prevent. The real work is happening in `own_loss=0.6024`, which
+is **already below the 0.693 BCE entropy floor** after just 30 SGD
+steps: the ownership head has learned meaningful per-cell features
+on real cold-game data in a single iter.
+
+This is the first iter 0 across Phase 2 that clears the "does the
+architecture actually work on production data" bar. Iter 1 (in
+progress at time of writing) is the decisive test of whether
+iter-over-iter bootstrapping compounds — i.e., whether `avg_moves`
+stays ≥ 80 and `eval` stays above the cold baseline instead of
+collapsing like it did in run1/2/3 iter 1.
+
+### Things still untested (post-run4b iter 0)
 
 - **Score-distribution head** (KataGo's secondary innovation; only
   worth adding on top of ownership if run4 plateaus early)
