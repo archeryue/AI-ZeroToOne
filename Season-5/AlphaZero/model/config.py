@@ -59,6 +59,14 @@ class TrainingConfig:
     # (~0.9), leaving the value head under-trained — see
     # PHASE_TWO_TRAINING.md Problem 4.
     value_loss_weight: float = 1.0
+    # Ownership-loss weight (KataGo-style auxiliary head, added in
+    # run4). Default 0.0 preserves the 9x9 recipe — the 9x9 net
+    # converged without this and we don't want to perturb it. The
+    # 13x13 preset turns it on. The supervision signal is per-cell
+    # BCE-with-logits, so the loss magnitude is ~0.5-0.7 on cold data
+    # (uniform predictions) and drops as the head learns. Weight 1.5
+    # follows KataGo's published range.
+    ownership_loss_weight: float = 0.0
 
     # Checkpointing
     checkpoint_interval: int = 10  # iterations between checkpoints
@@ -143,27 +151,33 @@ CONFIGS = {
             # the 9x9 run 2 fix used (20/85 ≈ 23%). Credible-child
             # cross-check stays on as the second line of defense.
             resign_min_move=40,
-            # Raised from the 1.0 default after run1 iter 0-4 eval_vs_random
-            # showed a value-head cannibalization pattern: strength
-            # oscillating 20→2→18→0→8 % while policy_loss monotonically
-            # dropped and value_loss monotonically rose. At equal weight,
-            # total_loss ≈ policy(~5) + value(~0.9) is 80 % policy-driven,
-            # so the value head sees ~5x less gradient than policy and
-            # drifts on noisy self-play value targets. 2.0 roughly
-            # balances the two heads' gradient contributions. See
-            # PHASE_TWO_TRAINING.md Problem 4.
-            value_loss_weight=2.0,
-            # 30 steps/iter (down from 100) is the run3 fix from the
-            # offline A/B (training/_phase2_offline_ab.py): with 100
-            # steps the value head memorizes 28k cold positions in <1
-            # epoch and produces confident wrong predictions on
-            # held-out (resign% 21, sat 25%). 30 steps under-trains per
-            # iter (no per-iter overfitting, resign% 0, sat 0) and
-            # leaves room for cumulative iter-over-iter bootstrapping.
-            # 30 × 60 iters = 1800 total SGD steps; ~46% buffer
-            # coverage at the 1M cap. WDL/BCE was tested and is worse
-            # than MSE in this regime.
+            # value_loss_weight=0.0 for run4 — this is NOT the same
+            # "turn off the value head" as old runs; it only disables
+            # the direct value-loss gradient. Value is now DERIVED
+            # from ownership (see model/network.py AlphaZeroNet): the
+            # value head has only two learnable scalars (value_scale,
+            # value_bias) and its output is tanh(k·Σ(2σ(own_logits)−1)+b).
+            #
+            # The offline A/B (training/_phase2_run4_offline_ab.py)
+            # showed that with derived value, any nonzero vlw hijacks
+            # the ownership head into predicting per-cell values that
+            # sum to noisy game outcomes — directly conflicting with
+            # the ownership loss's "predict real territory" target.
+            # With vlw=0, ownership loss alone trains the ownership
+            # head on dense per-cell real-game labels, and derived
+            # value reads off that. A6 recipe achieved held-out
+            # v_mse=0.9631 — the ONLY recipe across run1/2/3/4 offline
+            # A/Bs that went below the cold floor of ~1.00.
+            value_loss_weight=0.0,
+            # train_steps_per_iter=30 to prevent per-iter overfit.
+            # 30*60=1800 SGD steps total; with ownership's 169x
+            # supervision density, effective label count is ~300k
+            # per-cell targets across the run.
             train_steps_per_iter=30,
+            # Ownership weight 2.0 — the primary (and effectively
+            # only, with vlw=0) supervision signal for the trunk
+            # and the derived-value readout. Offline A/B winner.
+            ownership_loss_weight=2.0,
             # Eval every iter instead of every 5 iters for run2's first
             # few iters — we need iter-by-iter strength visibility to
             # confirm the fix actually works. Can revert to 5 once the

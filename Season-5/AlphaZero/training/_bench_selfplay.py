@@ -33,7 +33,7 @@ print(f"Model: {net.param_count():,} params")
 B = train_cfg.num_parallel_games * train_cfg.virtual_loss_batch  # 2048
 obs = torch.randn(B, 17, N, N, device=device, dtype=torch.float32)
 with torch.no_grad(), torch.amp.autocast("cuda"):
-    net(obs)  # warmup
+    net(obs)  # warmup (returns 3-tuple since run4)
 torch.cuda.synchronize()
 
 n_fwd = 50
@@ -106,10 +106,11 @@ class LimitedSP(ParallelSelfPlay):
                 # harvest
                 harvest_start = time.perf_counter()
                 for worker in self.workers:
-                    obs_np, pol_np, val_np, count = worker.harvest()
+                    obs_np, pol_np, val_np, own_np, count = worker.harvest()
                     if count > 0:
                         for j in range(count):
-                            buffer.push(obs_np[j], pol_np[j], val_np[j])
+                            buffer.push(obs_np[j], pol_np[j], val_np[j],
+                                        own_np[j])
                         total_positions += count
                 harvest_dt = time.perf_counter() - harvest_start
 
@@ -119,7 +120,7 @@ class LimitedSP(ParallelSelfPlay):
                     if self.use_cuda:
                         obs_tensor = self.obs_pinned.to(self.device, non_blocking=True)
                     with torch.no_grad(), torch.amp.autocast("cuda"):
-                        logits, values = self.infer_net(obs_tensor)
+                        logits, values, _own = self.infer_net(obs_tensor)
                         policies = torch.softmax(logits, dim=-1)
                     if self.use_cuda:
                         self.policy_pinned.copy_(policies, non_blocking=True)

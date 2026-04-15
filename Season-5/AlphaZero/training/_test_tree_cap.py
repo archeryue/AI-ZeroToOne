@@ -153,15 +153,19 @@ def main():
               f" {MAX_NODES//2:,}; cap may not have fired during probes")
 
     # Also run a harvest to verify the cap doesn't corrupt data.
-    obs, pol, val, count = worker.harvest()
+    obs, pol, val, own, count = worker.harvest()
     print(f"  harvest: {count} positions  "
-          f"(obs.shape={obs.shape}, pol.shape={pol.shape})")
+          f"(obs.shape={obs.shape}, pol.shape={pol.shape}, own.shape={own.shape})")
 
     assert count >= 0, "harvest count must be >= 0"
     if count > 0:
         assert obs.shape == (count, 17, N, N), f"bad obs shape: {obs.shape}"
         assert pol.shape == (count, N * N + 1), f"bad pol shape: {pol.shape}"
         assert val.shape == (count,), f"bad val shape: {val.shape}"
+        assert own.shape == (count, N, N), f"bad own shape: {own.shape}"
+        assert own.dtype.name == "int8", f"bad own dtype: {own.dtype}"
+        assert int(own.min()) >= -1 and int(own.max()) <= 1, \
+            f"ownership out of [-1, 1]: min={own.min()} max={own.max()}"
 
     print("PASS: tree cap honored, RSS bounded, harvest intact")
 

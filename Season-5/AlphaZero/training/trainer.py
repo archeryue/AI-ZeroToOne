@@ -1,9 +1,14 @@
 """Network training loop for AlphaZero.
 
-Loss = policy_loss + value_loss + L2_reg
-  policy_loss = -pi . log(p)          (cross-entropy with MCTS targets)
-  value_loss  = (z - v)^2             (MSE with game outcome)
-  L2_reg      = c * ||theta||^2       (via optimizer weight_decay)
+Loss = policy_loss + value_loss_weight * value_loss
+                  + ownership_loss_weight * ownership_loss + L2_reg
+  policy_loss    = -pi . log(p)                   (cross-entropy)
+  value_loss     = (z - v)^2                      (MSE with game outcome)
+  ownership_loss = mean BCE-with-logits per cell  (KataGo-style aux target)
+  L2_reg         = c * ||theta||^2                (via optimizer weight_decay)
+
+Ownership added in run4 (PHASE_TWO_TRAINING.md). Default weight 0.0
+preserves the 9x9 recipe; the 13x13 preset turns it on.
 """
 
 import math
@@ -64,22 +69,31 @@ class Trainer:
         if use_anchor:
             n_anchor = int(self.cfg.batch_size * anchor_frac)
             n_main = self.cfg.batch_size - n_anchor
-            obs_m, pol_m, val_m = buffer.sample(n_main)
-            obs_a, pol_a, val_a = anchor.sample(n_anchor)
+            obs_m, pol_m, val_m, own_m = buffer.sample(n_main)
+            obs_a, pol_a, val_a, own_a = anchor.sample(n_anchor)
             obs_np = np.concatenate([obs_m, obs_a], axis=0)
             policy_np = np.concatenate([pol_m, pol_a], axis=0)
             value_np = np.concatenate([val_m, val_a], axis=0)
+            ownership_np = np.concatenate([own_m, own_a], axis=0)
         else:
-            obs_np, policy_np, value_np = buffer.sample(self.cfg.batch_size)
+            obs_np, policy_np, value_np, ownership_np = buffer.sample(
+                self.cfg.batch_size)
         # Buffer stores obs as uint8 (Phase 2 memory optimization).
         # Cast to float AFTER the H2D copy so PCIe sees 1 byte/cell
         # instead of 4 — CUDA fuses the dtype promotion into the load.
         obs = torch.from_numpy(obs_np).to(self.device).float()
         target_policy = torch.from_numpy(policy_np).to(self.device)
         target_value = torch.from_numpy(value_np).to(self.device)
+        # Ownership: int8 in {-1, 0, 1}; map to BCE target in [0, 1].
+        # Dame cells (0) get target 0.5, where BCE is minimized at
+        # logit=0 (uncertain). KataGo uses 3-class softmax instead;
+        # 2-class BCE-with-logits is simpler and works at this scale.
+        target_ownership = torch.from_numpy(ownership_np).to(
+            self.device).float()
+        target_ownership_01 = (target_ownership + 1.0) / 2.0
 
         with torch.amp.autocast("cuda", enabled=self.device.type == "cuda"):
-            logits, value = self.net(obs)
+            logits, value, ownership_logits = self.net(obs)
 
             # Policy loss: cross-entropy with MCTS visit distribution
             log_probs = F.log_softmax(logits, dim=-1)
@@ -88,13 +102,27 @@ class Trainer:
             # Value loss: MSE
             value_loss = F.mse_loss(value, target_value)
 
+            # Ownership loss: per-cell BCE-with-logits. Reduces to
+            # (B*N*N,) → mean. Provides ~169× the supervision density
+            # of the scalar value loss alone, which is the whole point
+            # of adding the head — see PHASE_TWO_TRAINING.md run4.
+            own_w = getattr(self.cfg, "ownership_loss_weight", 0.0)
+            if own_w > 0.0:
+                ownership_loss = F.binary_cross_entropy_with_logits(
+                    ownership_logits, target_ownership_01)
+            else:
+                ownership_loss = torch.zeros((), device=self.device)
+
             # Weighted total. policy_loss magnitude (~5, cross-entropy
             # over 170 actions) dominates value_loss magnitude (~0.9,
             # MSE over ±1) at equal weights, leaving the value head
-            # under-trained. Phase 2 13x13 raises value_loss_weight
-            # from 1.0 → 2.0 to rebalance — see PHASE_TWO_TRAINING.md
-            # Problem 4 for the diagnosis.
-            loss = policy_loss + self.cfg.value_loss_weight * value_loss
+            # under-trained — Phase 2 13x13 raises value_loss_weight
+            # to 2.0 to partially compensate. The ownership head is
+            # a much larger fix: dense per-cell labels eliminate the
+            # sparse-supervision regime entirely.
+            loss = (policy_loss
+                    + self.cfg.value_loss_weight * value_loss
+                    + own_w * ownership_loss)
 
         # NaN / Inf guard — skip the step entirely rather than poisoning
         # the weights. Returns the current (unchanged) values so the
@@ -105,6 +133,7 @@ class Trainer:
                 "loss": float("nan"),
                 "policy_loss": float("nan"),
                 "value_loss": float("nan"),
+                "ownership_loss": float("nan"),
                 "skipped": True,
             }
 
@@ -122,6 +151,7 @@ class Trainer:
             "loss": loss.item(),
             "policy_loss": policy_loss.item(),
             "value_loss": value_loss.item(),
+            "ownership_loss": float(ownership_loss.item()),
             "skipped": False,
         }
 
@@ -136,6 +166,7 @@ class Trainer:
         total_loss = 0.0
         total_policy = 0.0
         total_value = 0.0
+        total_ownership = 0.0
         steps = self.cfg.train_steps_per_iter
         applied = 0
         skipped_this_epoch = 0
@@ -149,6 +180,7 @@ class Trainer:
             total_loss += stats["loss"]
             total_policy += stats["policy_loss"]
             total_value += stats["value_loss"]
+            total_ownership += stats["ownership_loss"]
             applied += 1
 
         denom = max(applied, 1)
@@ -156,6 +188,7 @@ class Trainer:
             "loss": total_loss / denom,
             "policy_loss": total_policy / denom,
             "value_loss": total_value / denom,
+            "ownership_loss": total_ownership / denom,
             "lr": lr,
             "total_steps": self.total_steps,
             "skipped": skipped_this_epoch,

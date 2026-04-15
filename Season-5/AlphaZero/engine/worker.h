@@ -79,10 +79,19 @@ public:
     static constexpr int MAX_TREE_NODES = 1000000;
 
 private:
-    // Per-position record (obs + policy + who played)
+    // Per-position record (obs + policy + who played + per-cell
+    // ownership target). Ownership is filled in by finish_game once
+    // the game ends — at training time it gives the trunk dense
+    // per-cell supervision (KataGo-style) instead of the single
+    // scalar value label per ~150-move game. See PHASE_TWO_TRAINING.md
+    // run4/ownership-head section. Stored in current-player perspective:
+    //   +1 = cell ends up owned by player-to-move at this position
+    //   -1 = cell ends up owned by the opponent
+    //    0 = dame (no one)
     struct MoveRecord {
         float obs[OBS_SIZE];
         float policy[ACTIONS];
+        int8_t ownership[CELLS];
         uint8_t turn;
     };
 
@@ -110,6 +119,7 @@ private:
     std::vector<float> done_obs_;
     std::vector<float> done_policy_;
     std::vector<float> done_value_;
+    std::vector<int8_t> done_ownership_;  // length = done_count_ * CELLS
     int done_count_ = 0;
     int games_completed_ = 0;
 
@@ -139,11 +149,26 @@ private:
 
         float result = (s.game.status == go::BLACK_WIN) ? 1.0f : -1.0f;
 
-        for (const auto& rec : s.records) {
+        // Compute per-cell ownership ONCE at game end (Tromp-Taylor on
+        // the final board). Each MoveRecord then gets a copy flipped
+        // into that record's current-player perspective. This is the
+        // KataGo-style auxiliary supervision target — 169 dense labels
+        // per position vs the single scalar value label per game.
+        int8_t abs_ownership[CELLS];
+        s.game.board.compute_ownership(abs_ownership);
+
+        for (auto& rec : s.records) {
             float value = (rec.turn == go::BLACK) ? result : -result;
+            int8_t persp = (rec.turn == go::BLACK) ? 1 : -1;
+            for (int p = 0; p < CELLS; ++p) {
+                rec.ownership[p] = static_cast<int8_t>(abs_ownership[p] * persp);
+            }
+
             done_obs_.insert(done_obs_.end(), rec.obs, rec.obs + OBS_SIZE);
             done_policy_.insert(done_policy_.end(), rec.policy, rec.policy + ACTIONS);
             done_value_.push_back(value);
+            done_ownership_.insert(done_ownership_.end(),
+                                   rec.ownership, rec.ownership + CELLS);
             done_count_++;
         }
 
@@ -324,14 +349,19 @@ public:
         return m;
     }
 
-    // Move completed training data out. Returns (obs, policy, value, count).
-    // obs:    flat float array, length = count * OBS_SIZE
-    // policy: flat float array, length = count * ACTIONS
-    // value:  float array, length = count
+    // Move completed training data out. Returns (obs, policy, value,
+    // ownership, count). Ownership added in run4 for the KataGo-style
+    // auxiliary head — see compute_ownership in go.h and the
+    // PHASE_TWO_TRAINING.md ownership-head section.
+    //   obs:        flat float, length = count * OBS_SIZE
+    //   policy:     flat float, length = count * ACTIONS
+    //   value:      float, length = count
+    //   ownership:  int8, length = count * CELLS  (current-player perspective)
     struct HarvestResult {
         std::vector<float> obs;
         std::vector<float> policy;
         std::vector<float> value;
+        std::vector<int8_t> ownership;
         int count;
     };
 
@@ -340,10 +370,12 @@ public:
         r.obs = std::move(done_obs_);
         r.policy = std::move(done_policy_);
         r.value = std::move(done_value_);
+        r.ownership = std::move(done_ownership_);
         r.count = done_count_;
         done_obs_.clear();
         done_policy_.clear();
         done_value_.clear();
+        done_ownership_.clear();
         done_count_ = 0;
         return r;
     }

@@ -37,8 +37,9 @@ import numpy as np
 SYMMETRIES = [(k, f) for k in range(4) for f in (False, True)]
 
 
-def augment_8fold(obs: np.ndarray, policy: np.ndarray, board_size: int):
-    """Yield all 8 symmetries of a single (obs, policy) pair.
+def augment_8fold(obs: np.ndarray, policy: np.ndarray, board_size: int,
+                  ownership: np.ndarray = None):
+    """Yield all 8 symmetries of a single (obs, policy[, ownership]) tuple.
 
     Reference implementation kept for the smoke tests. Production
     sampling uses the vectorized path inside ReplayBuffer.sample().
@@ -47,6 +48,10 @@ def augment_8fold(obs: np.ndarray, policy: np.ndarray, board_size: int):
         obs: (17, N, N) observation planes
         policy: (N*N+1,) policy vector — last element is pass probability
         board_size: N
+        ownership: optional (N, N) per-cell ownership target. If
+            provided, each yielded tuple is (obs_t, policy_t, own_t);
+            otherwise (obs_t, policy_t) for backwards compat with old
+            tests.
     """
     N = board_size
     pass_prob = policy[-1]
@@ -59,16 +64,25 @@ def augment_8fold(obs: np.ndarray, policy: np.ndarray, board_size: int):
             obs_t = np.flip(obs_t, axis=2).copy()
             pol_t = np.flip(pol_t, axis=1).copy()
         policy_t = np.append(pol_t.ravel(), pass_prob)
-        yield obs_t, policy_t
+        if ownership is not None:
+            own_t = np.rot90(ownership, k).copy()
+            if flip:
+                own_t = np.flip(own_t, axis=1).copy()
+            yield obs_t, policy_t, own_t
+        else:
+            yield obs_t, policy_t
 
 
 def _apply_symmetry_batch(obs_batch: np.ndarray, policy_batch: np.ndarray,
+                          ownership_batch: np.ndarray,
                           k: int, flip: bool, N: int):
     """Apply one (k, flip) symmetry to a whole batch at once.
 
-    Operates on the spatial axes of obs (last two) and the reshaped
-    board portion of policy. The pass action sits at policy[..., -1]
-    and is invariant under any board symmetry.
+    Operates on the spatial axes of obs (last two), the reshaped board
+    portion of policy, and the (B, N, N) ownership target. The pass
+    action sits at policy[..., -1] and is invariant under any board
+    symmetry; ownership values are scalars per cell so they're sym-
+    invariant in value too — we just permute their spatial positions.
     """
     # obs: (B, 17, N, N) — rotate spatial axes
     obs_t = np.rot90(obs_batch, k, axes=(2, 3))
@@ -88,7 +102,14 @@ def _apply_symmetry_batch(obs_batch: np.ndarray, policy_batch: np.ndarray,
     board_pol_t = np.ascontiguousarray(board_pol_t)
     pol_t = np.concatenate(
         [board_pol_t.reshape(-1, N * N), pass_pol], axis=1)
-    return obs_t, pol_t
+
+    # ownership: (B, N, N) — same spatial transform as the policy board.
+    own_t = np.rot90(ownership_batch, k, axes=(1, 2))
+    if flip:
+        own_t = np.flip(own_t, axis=2)
+    own_t = np.ascontiguousarray(own_t)
+
+    return obs_t, pol_t, own_t
 
 
 # ─── ReplayBuffer ───────────────────────────────────────────────────
@@ -112,11 +133,16 @@ class ReplayBuffer:
         self.obs = np.zeros((capacity, input_planes, N, N), dtype=np.uint8)
         self.policy = np.zeros((capacity, actions), dtype=np.float32)
         self.value = np.zeros(capacity, dtype=np.float32)
+        # Ownership: per-cell int8, current-player perspective, values
+        # in {-1, 0, +1}. Added in run4 for the KataGo-style aux head.
+        # ~169 bytes per position on 13x13 = ~169 MB at 1M cap, trivial.
+        self.ownership = np.zeros((capacity, N, N), dtype=np.int8)
 
         self.size = 0
         self.index = 0
 
-    def push(self, obs: np.ndarray, policy: np.ndarray, value: float):
+    def push(self, obs: np.ndarray, policy: np.ndarray, value: float,
+             ownership: np.ndarray):
         """Add one raw position to the buffer.
 
         Augmentation is no longer done at push time — it happens at
@@ -128,19 +154,24 @@ class ReplayBuffer:
         self.obs[idx] = obs.astype(np.uint8, copy=False)
         self.policy[idx] = policy
         self.value[idx] = value
+        self.ownership[idx] = ownership.astype(np.int8, copy=False)
         self.index += 1
         self.size = min(self.size + 1, self.capacity)
 
-    def _store(self, obs: np.ndarray, policy: np.ndarray, value: float):
+    def _store(self, obs: np.ndarray, policy: np.ndarray, value: float,
+               ownership: np.ndarray = None):
         """Direct insert without symmetry. Used by tests + load_from."""
         idx = self.index % self.capacity
         self.obs[idx] = obs.astype(np.uint8, copy=False)
         self.policy[idx] = policy
         self.value[idx] = value
+        if ownership is not None:
+            self.ownership[idx] = ownership.astype(np.int8, copy=False)
         self.index += 1
         self.size = min(self.size + 1, self.capacity)
 
-    def sample(self, batch_size: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def sample(self, batch_size: int) -> tuple[np.ndarray, np.ndarray,
+                                                 np.ndarray, np.ndarray]:
         """Sample a random batch, applying a random symmetry per sample.
 
         Each sampled position is transformed by one of the 8 dihedral
@@ -148,6 +179,9 @@ class ReplayBuffer:
         is processed in 8 buckets (one per symmetry) so each rotation
         runs once on a contiguous sub-batch — much faster than a
         per-sample Python loop.
+
+        Returns (obs, policy, value, ownership). Ownership added in
+        run4 for the auxiliary loss head.
         """
         N = self.board_size
         # Sample positions uniformly with replacement (replacement is
@@ -156,24 +190,27 @@ class ReplayBuffer:
         indices = np.random.randint(0, self.size, size=batch_size)
         sym_choices = np.random.randint(0, 8, size=batch_size)
 
-        raw_obs = self.obs[indices]        # (B, 17, N, N)
-        raw_pol = self.policy[indices]     # (B, N*N+1)
-        out_value = self.value[indices].copy()  # values are scalar, sym-invariant
+        raw_obs = self.obs[indices]              # (B, 17, N, N)
+        raw_pol = self.policy[indices]           # (B, N*N+1)
+        raw_own = self.ownership[indices]        # (B, N, N)
+        out_value = self.value[indices].copy()   # scalar, sym-invariant
 
         out_obs = np.empty_like(raw_obs)
         out_pol = np.empty_like(raw_pol)
+        out_own = np.empty_like(raw_own)
 
         # Bucket by symmetry id and process each bucket as one rotation.
         for sym_id, (k, flip) in enumerate(SYMMETRIES):
             mask = sym_choices == sym_id
             if not mask.any():
                 continue
-            obs_t, pol_t = _apply_symmetry_batch(
-                raw_obs[mask], raw_pol[mask], k, flip, N)
+            obs_t, pol_t, own_t = _apply_symmetry_batch(
+                raw_obs[mask], raw_pol[mask], raw_own[mask], k, flip, N)
             out_obs[mask] = obs_t
             out_pol[mask] = pol_t
+            out_own[mask] = own_t
 
-        return out_obs, out_pol, out_value
+        return out_obs, out_pol, out_value, out_own
 
     def save_to(self, path: str) -> None:
         """Persist current live samples to a .npz file.
@@ -193,6 +230,7 @@ class ReplayBuffer:
                 obs=self.obs[:self.size],
                 policy=self.policy[:self.size],
                 value=self.value[:self.size],
+                ownership=self.ownership[:self.size],
                 index=np.int64(self.index),
                 size=np.int64(self.size),
             )
@@ -205,6 +243,9 @@ class ReplayBuffer:
         saved buffer was larger. `index` is advanced to `size` so new
         pushes continue to wrap circularly. Handles legacy float32
         obs saves by casting to uint8 on load (values are always 0/1).
+        Handles legacy buffers without ownership by leaving the
+        ownership tensor zero — caller must set ownership_loss_weight=0
+        in that case.
         """
         data = np.load(path)
         n = int(data["size"])
@@ -215,6 +256,10 @@ class ReplayBuffer:
         self.obs[:n] = saved_obs
         self.policy[:n] = data["policy"][:n]
         self.value[:n] = data["value"][:n]
+        if "ownership" in data.files:
+            self.ownership[:n] = data["ownership"][:n]
+        # else: legacy buffer; ownership stays zero (and
+        # ownership_loss_weight should be 0 for such runs).
         self.size = n
         self.index = n
 

@@ -34,7 +34,9 @@ def make_evaluator(net: torch.nn.Module, device: torch.device):
     def evaluator(obs_batch_np):
         obs = torch.from_numpy(np.array(obs_batch_np)).to(device)
         with torch.no_grad(), torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            logits, values = net(obs)
+            # Net returns (policy_logits, value, ownership_logits) since
+            # run4; MCTS only needs policy + value.
+            logits, values, _own = net(obs)
             policies = torch.softmax(logits, dim=-1)
         return policies.cpu().numpy(), values.cpu().numpy()
     return evaluator
@@ -133,14 +135,22 @@ def play_one_game(
     else:
         game_result = -1.0
 
-    # Fill in values: +1 if player won, -1 if lost
+    # Per-cell ownership at game end (Tromp-Taylor, absolute frame).
+    # Same source as the C++ worker — the auxiliary supervision target
+    # for the run4 ownership head. See PHASE_TWO_TRAINING.md.
+    abs_ownership = np.array(game.compute_ownership(), dtype=np.int8)
+
+    # Fill in values + per-record ownership in current-player perspective.
     samples = []
     for obs, policy, turn in positions:
         if turn == go_engine.BLACK:
             value = game_result
+            persp = 1
         else:
             value = -game_result
-        samples.append((obs, policy, value))
+            persp = -1
+        ownership = (abs_ownership * persp).astype(np.int8)
+        samples.append((obs, policy, value, ownership))
 
     return samples
 
@@ -167,8 +177,8 @@ def run_self_play(
     for i in range(num_games):
         samples = play_one_game(net, device, model_cfg, train_cfg, game_id=i)
 
-        for obs, policy, value in samples:
-            buffer.push(obs, policy, value)
+        for obs, policy, value, ownership in samples:
+            buffer.push(obs, policy, value, ownership)
 
         total_positions += len(samples)
         total_moves += len(samples)

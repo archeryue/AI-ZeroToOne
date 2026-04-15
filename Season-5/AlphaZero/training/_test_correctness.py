@@ -108,7 +108,8 @@ import tempfile
 # C++ engine output, then push it back and confirm identity).
 obs_f32_orig = buffer.obs[0].astype(np.float32)
 tmp_buf = ReplayBuffer(16, N)
-tmp_buf.push(obs_f32_orig, buffer.policy[0], buffer.value[0])
+tmp_buf.push(obs_f32_orig, buffer.policy[0], buffer.value[0],
+             buffer.ownership[0])
 obs_back = tmp_buf.obs[0].astype(np.float32)
 assert np.array_equal(obs_f32_orig, obs_back), \
     "uint8 round-trip lost information — obs values outside {0, 1}?"

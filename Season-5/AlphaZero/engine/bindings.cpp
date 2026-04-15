@@ -98,6 +98,15 @@ void bind_game(py::module_& m, const char* name) {
                     buf(r, c) = g.board.color[B::pos(r, c)];
             return grid;
         })
+        .def("compute_ownership", [](const G& g) {
+            // Tromp-Taylor per-cell ownership at the current board
+            // state. Returns int8 (N, N) with +1 BLACK / -1 WHITE / 0 dame.
+            // Used by tests; production self-play computes this in
+            // worker.h::finish_game so it never crosses the bindings.
+            py::array_t<int8_t> own({N, N});
+            g.board.compute_ownership(own.mutable_data());
+            return own;
+        })
         .def_property_readonly("current_turn", [](const G& g) { return (int)g.current_turn; })
         .def_property_readonly("status", [](const G& g) { return (int)g.status; })
         .def_property_readonly("move_count", [](const G& g) { return g.move_count; })
@@ -232,12 +241,14 @@ void bind_worker(py::module_& m, const char* name) {
             auto r = w.harvest();
             constexpr int OBS_SIZE = 17 * N * N;
             constexpr int ACTIONS = N * N + 1;
+            constexpr int CELLS = N * N;
             int n = r.count;
             if (n == 0) {
                 auto obs = py::array_t<float>(std::vector<ssize_t>{0, 17, N, N});
                 auto pol = py::array_t<float>(std::vector<ssize_t>{0, ACTIONS});
                 auto val = py::array_t<float>(std::vector<ssize_t>{0});
-                return py::make_tuple(obs, pol, val, (int)0);
+                auto own = py::array_t<int8_t>(std::vector<ssize_t>{0, N, N});
+                return py::make_tuple(obs, pol, val, own, (int)0);
             }
             auto obs = py::array_t<float>(std::vector<ssize_t>{n, 17, N, N});
             std::memcpy(obs.mutable_data(), r.obs.data(), n * OBS_SIZE * sizeof(float));
@@ -245,7 +256,9 @@ void bind_worker(py::module_& m, const char* name) {
             std::memcpy(pol.mutable_data(), r.policy.data(), n * ACTIONS * sizeof(float));
             auto val = py::array_t<float>(std::vector<ssize_t>{n});
             std::memcpy(val.mutable_data(), r.value.data(), n * sizeof(float));
-            return py::make_tuple(obs, pol, val, (int)n);
+            auto own = py::array_t<int8_t>(std::vector<ssize_t>{n, N, N});
+            std::memcpy(own.mutable_data(), r.ownership.data(), n * CELLS * sizeof(int8_t));
+            return py::make_tuple(obs, pol, val, own, (int)n);
         })
 
         .def_property_readonly("active_count", &W::active_count)

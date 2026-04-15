@@ -366,6 +366,66 @@ struct Board {
     void to_grid(uint8_t* out) const {
         std::memcpy(out, color, CELLS);
     }
+
+    // Per-cell Tromp-Taylor ownership at the current board state.
+    // Writes one int8 per cell into `out`:
+    //   +1 = owned by BLACK (stone or BLACK-only-bordered empty region)
+    //   -1 = owned by WHITE
+    //    0 = dame (empty region bordered by both colors)
+    //
+    // This mirrors the flood-fill loop in `score()` but records per-cell
+    // labels instead of accumulating totals. Used by the KataGo-style
+    // ownership auxiliary head added in run 4: each self-play position
+    // gets 169 (= 13×13) per-cell ownership labels at game end as
+    // dense supervision targets, vs the single scalar value label per
+    // ~150-move game that is too sparse to train a 4.5M-param net on.
+    // See PHASE_TWO_TRAINING.md run3 + ownership-head section.
+    void compute_ownership(int8_t* out) const {
+        // Stones own themselves.
+        for (int p = 0; p < CELLS; ++p) {
+            if (color[p] == BLACK) out[p] = 1;
+            else if (color[p] == WHITE) out[p] = -1;
+            else out[p] = 0;  // overwritten below if region is single-color
+        }
+
+        // Flood-fill empty regions, label by bordering color(s).
+        ++gen;
+        int stack[CELLS];
+        int region_cells[CELLS];
+        for (int p = 0; p < CELLS; ++p) {
+            if (color[p] != EMPTY || visited[p] == gen) continue;
+
+            int region_n = 0;
+            uint8_t borders = 0;
+            int sp = 0;
+            stack[sp++] = p;
+            visited[p] = gen;
+
+            while (sp > 0) {
+                int cur = stack[--sp];
+                region_cells[region_n++] = cur;
+                int nbrs[4];
+                int nn = neighbors(cur, nbrs);
+                for (int i = 0; i < nn; ++i) {
+                    int nb = nbrs[i];
+                    if (color[nb] == EMPTY) {
+                        if (visited[nb] != gen) {
+                            visited[nb] = gen;
+                            stack[sp++] = nb;
+                        }
+                    } else {
+                        borders |= (1 << (color[nb] - 1));
+                    }
+                }
+            }
+
+            int8_t label;
+            if (borders == 1) label = 1;       // BLACK only
+            else if (borders == 2) label = -1; // WHITE only
+            else label = 0;                    // dame (both or neither)
+            for (int i = 0; i < region_n; ++i) out[region_cells[i]] = label;
+        }
+    }
 };
 
 // ─── Game<N> ──────────────────────────────────────────────────────

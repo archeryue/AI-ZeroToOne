@@ -1404,6 +1404,40 @@ Re-checked the cgroup limit because the previous narrative assumed
 
 No memory-budget edits needed for run3.
 
+### Run 3 result — R2 falsified at iter 1
+
+Aborted at iter 1 (~70 min wall time after launch). Iter 0 looked
+normal but iter 1 immediately tripped two abort gates:
+
+| metric | iter 0 | iter 1 | Δ | gate |
+|---|---:|---:|---:|---|
+| avg moves/game | 146 | **56** | −90 | ❌ < 80 |
+| v_loss | 0.8821 | **0.9653** | **+0.083** | ❌ rising |
+| pi_loss | 5.1909 | 5.0764 | −0.115 | ✓ |
+| eval vs random | 15 % | **5 %** | −10 pp | ❌ |
+| self-play wall | 2742 s | 814 s | −1928 s | confirms collapse |
+
+The iter-0 → iter-1 v_loss drift is **+0.083, identical in magnitude
+to run1's** +0.083 from the same pair of iters. Reducing
+`train_steps_per_iter` from 100 to 30 changed **nothing** about the
+direction or magnitude of the drift. Game length collapsed from 146
+to 56 moves the moment the trained net's value head crossed the
+resign threshold on enough positions.
+
+**The R2 hypothesis is decisively falsified:** iter-over-iter
+bootstrapping with under-training does NOT escape cold-start at
+this scale. The offline A/B already showed every simple recipe has
+Δv > 0 on held-out cold data; the live test confirms that even the
+recipe with the smallest per-iter footprint still produces enough
+value-head drift to trigger the resign loop in one iter.
+
+Preserved on disk for the post-mortem:
+
+- `checkpoints/13x13_run3/checkpoint_0000.pt` (iter 0 weights)
+- `checkpoints/13x13_run3/checkpoint_0001.pt` (iter 1 regressed)
+- `checkpoints/13x13_run3/latest_buffer.npz` (1.47 GB, end-of-iter-1)
+- `checkpoints/13x13_run3/training_log.jsonl`
+
 ### Hard go/no-go gate at iter 5
 
 This is the discipline that makes "R2 first" defensible. R2's

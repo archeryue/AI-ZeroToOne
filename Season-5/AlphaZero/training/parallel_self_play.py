@@ -221,10 +221,11 @@ class ParallelSelfPlay:
 
                 # Harvest completed data (safe: workers are at barrier)
                 for worker in self.workers:
-                    obs_np, pol_np, val_np, count = worker.harvest()
+                    obs_np, pol_np, val_np, own_np, count = worker.harvest()
                     if count > 0:
                         for j in range(count):
-                            buffer.push(obs_np[j], pol_np[j], val_np[j])
+                            buffer.push(obs_np[j], pol_np[j], val_np[j],
+                                        own_np[j])
                         total_positions += count
 
                 total_games = (sum(w.games_done for w in self.workers)
@@ -255,11 +256,14 @@ class ParallelSelfPlay:
                         obs_tensor = torch.from_numpy(obs_cat)
 
                     with torch.no_grad():
+                        # Net returns (policy_logits, value, ownership_logits)
+                        # since run4. Self-play only needs policy + value;
+                        # ownership is discarded.
                         if self.use_cuda:
                             with torch.amp.autocast("cuda"):
-                                logits, values = self.infer_net(obs_tensor)
+                                logits, values, _own = self.infer_net(obs_tensor)
                         else:
-                            logits, values = self.infer_net(obs_tensor)
+                            logits, values, _own = self.infer_net(obs_tensor)
                         policies = torch.softmax(logits, dim=-1)
 
                     if self.use_cuda:
@@ -331,10 +335,10 @@ class ParallelSelfPlay:
 
         # Final harvest
         for worker in self.workers:
-            obs_np, pol_np, val_np, count = worker.harvest()
+            obs_np, pol_np, val_np, own_np, count = worker.harvest()
             if count > 0:
                 for j in range(count):
-                    buffer.push(obs_np[j], pol_np[j], val_np[j])
+                    buffer.push(obs_np[j], pol_np[j], val_np[j], own_np[j])
                 total_positions += count
 
         total_games = (sum(w.games_done for w in self.workers)
