@@ -259,7 +259,7 @@ def main():
     sp = ParallelSelfPlay(net, device, model_cfg, train_cfg,
                           num_workers=num_workers)
 
-    print("\n--- Training Loop ---\n")
+    print("\n--- Training Loop ---\n", flush=True)
 
     for iteration in range(start_iter, args.iterations):
         iter_start = time.time()
@@ -275,7 +275,7 @@ def main():
         print(f"Iter {iteration:4d} | Self-play: {sp_stats['games']} games, "
               f"{sp_stats['positions']} pos ({avg_moves:.0f} avg moves), "
               f"{sp_stats['games_per_sec']:.1f} games/s, "
-              f"buf={sp_stats['buffer_size']}, {sp_time:.1f}s")
+              f"buf={sp_stats['buffer_size']}, {sp_time:.1f}s", flush=True)
 
         # 2. Train
         if len(buffer) >= train_cfg.batch_size:
@@ -289,42 +289,42 @@ def main():
                   f"(pi={tr_stats['policy_loss']:.4f}, "
                   f"v={tr_stats['value_loss']:.4f}, "
                   f"own={tr_stats.get('ownership_loss', 0.0):.4f}), "
-                  f"lr={tr_stats['lr']:.6f}, {tr_time:.1f}s")
+                  f"lr={tr_stats['lr']:.6f}, {tr_time:.1f}s", flush=True)
         else:
             tr_stats = {}
             print(f"         | Train: skipped (buffer {len(buffer)} < "
-                  f"batch {train_cfg.batch_size})")
+                  f"batch {train_cfg.batch_size})", flush=True)
 
-        # Buffer persistence re-enabled for Phase 2. Phase 1 had to
-        # disable this because the np.savez transient on a 500K ×
-        # float32 obs buffer pushed peak RSS to 42.84 GiB, exactly at
-        # the 42.83 GiB cgroup cap. With the uint8 obs storage landed
-        # in Phase 2 prep, the 13x13 1M buffer is 3.6 GB (down from
-        # 12.2 GB) and the savez transient is ~4× smaller too — it
-        # fits comfortably under the cgroup limit.
+        # Buffer persistence re-enabled for Phase 2 (see uint8 prep in
+        # PHASE_TWO_TRAINING.md §1).
         buffer.save_to(buffer_path)
 
-        # 3. Evaluate periodically
+        # 3. Checkpoint FIRST, before eval — run4 iter 0 died during
+        # eval and we lost the trained weights because the save was
+        # gated behind eval. Save first so a crash mid-eval still
+        # preserves the trained state for post-hoc audit / resume.
+        if (iteration + 1) % train_cfg.checkpoint_interval == 0:
+            ckpt_path = os.path.join(args.output_dir,
+                                     f"checkpoint_{iteration:04d}.pt")
+            trainer.save_checkpoint(ckpt_path, iteration)
+            print(f"         | Checkpoint saved: {ckpt_path}", flush=True)
+
+        # 4. Evaluate periodically — after checkpoint so crashes here
+        # don't cost the trained weights.
         eval_stats = {}
         if (iteration + 1) % train_cfg.eval_interval == 0:
             ev_start = time.time()
-            num_eval = 20 if args.smoke_test else 100
+            # 50 games on 13x13 (was 100) — halves eval wall time,
+            # shrinks the window for an external kill to hit, still
+            # statistically meaningful (binomial σ for p=0.15 on 50
+            # games is ±5 pp, vs ±3.6 pp on 100 — good enough).
+            num_eval = 20 if args.smoke_test else 50
             win_rate = evaluate_vs_random(net, device, model_cfg, train_cfg,
                                           num_games=num_eval)
             ev_time = time.time() - ev_start
             eval_stats = {"vs_random_winrate": win_rate}
             print(f"         | Eval vs random: {win_rate:.1%} "
-                  f"({num_eval} games, {ev_time:.1f}s)")
-
-        # 4. Checkpoint — keep ALL of them. Each 9x9 ckpt is ~36 MB,
-        # 73 iters × 36 MB = ~2.6 GB total, which is negligible. Prior
-        # run lost iter 14 to a `KEEP_LAST=5` retention sweep and we
-        # couldn't reconstruct the weight-drift trajectory post-hoc.
-        if (iteration + 1) % train_cfg.checkpoint_interval == 0:
-            ckpt_path = os.path.join(args.output_dir,
-                                     f"checkpoint_{iteration:04d}.pt")
-            trainer.save_checkpoint(ckpt_path, iteration, extra=eval_stats)
-            print(f"         | Checkpoint saved: {ckpt_path}")
+                  f"({num_eval} games, {ev_time:.1f}s)", flush=True)
 
         # Log
         iter_time = time.time() - iter_start
@@ -338,8 +338,8 @@ def main():
         with open(log_path, "a") as f:
             f.write(json.dumps(log_entry) + "\n")
 
-        print(f"         | Total: {iter_time:.1f}s")
-        print()
+        print(f"         | Total: {iter_time:.1f}s", flush=True)
+        print(flush=True)
 
     # Final checkpoint
     final_path = os.path.join(args.output_dir, "model_final.pt")
