@@ -43,6 +43,18 @@ struct SelfPlayConfig {
     float resign_disabled_frac = 0.20f;
     float resign_min_child_visits_frac = 0.05f;
     int max_game_moves = 200;
+    // Pass-collapse floor. The ownership-derived value head learns
+    // "pass is fine when territory looks settled" from iter 0/1 late-
+    // game training data; once the ownership head is mildly trained
+    // the policy over-generalizes this to early-game positions and
+    // games collapse via consecutive passes at move ~40-60 instead of
+    // reaching natural ~170-move endings. Solution: below pass_min_move,
+    // strip the pass action from the MCTS visit distribution before
+    // sampling the move. The stored policy target is unchanged (so
+    // the net can still learn about pass in positions where MCTS
+    // genuinely explored it), only the PLAYED move is gated. Set to
+    // 0 to disable (9x9 preset leaves this at 0).
+    int pass_min_move = 0;
 };
 
 template<int N>
@@ -185,6 +197,27 @@ private:
         MoveRecord rec;
         s.game.to_observation(rec.obs);
         s.tree->get_policy(rec.policy, temp);
+
+        // Pass-floor fix v2: zero the pass slot in the STORED policy
+        // target (not just the sampling distribution) below
+        // pass_min_move. The v1 fix only gated the sampled action,
+        // letting MCTS visits for pass still be recorded as a
+        // training target. The net learned "pass is a valid opening
+        // choice" over 5 iters, crossing a softmax threshold where
+        // policy argmax on an empty board became pass — making the
+        // eval path (which doesn't gate pass) lose 50/50 vs random.
+        // Zeroing the target + renormalizing the non-pass mass
+        // prevents the net from ever learning pass in early game.
+        if (s.move_num < cfg_.pass_min_move) {
+            rec.policy[ACTIONS - 1] = 0.0f;
+            float s_prob = 0.0f;
+            for (int i = 0; i < ACTIONS - 1; ++i) s_prob += rec.policy[i];
+            if (s_prob > 0.0f) {
+                float inv = 1.0f / s_prob;
+                for (int i = 0; i < ACTIONS - 1; ++i) rec.policy[i] *= inv;
+            }
+        }
+
         rec.turn = s.game.current_turn;
         s.records.push_back(rec);
 
@@ -225,8 +258,11 @@ private:
             }
         }
 
-        // Sample action from MCTS policy
-        std::discrete_distribution<int> dist(rec.policy, rec.policy + ACTIONS);
+        // Sample action from MCTS policy. rec.policy already has
+        // pass zeroed above when move_num < pass_min_move, so the
+        // sampling distribution inherits the same gate automatically.
+        std::discrete_distribution<int> dist(
+            rec.policy, rec.policy + ACTIONS);
         int action = dist(rng_);
 
         // Play move

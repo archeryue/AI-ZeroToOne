@@ -49,6 +49,7 @@ def _make_sp_config(train_cfg: TrainingConfig) -> go_engine.SelfPlayConfig:
     cfg.resign_disabled_frac = train_cfg.resign_disabled_frac
     cfg.resign_min_child_visits_frac = train_cfg.resign_min_child_visits_frac
     cfg.max_game_moves = train_cfg.max_game_moves
+    cfg.pass_min_move = train_cfg.pass_min_move
     return cfg
 
 
@@ -170,7 +171,8 @@ class ParallelSelfPlay:
             # Restart any finished games
             worker.restart_completed()
 
-    def run_games(self, target_games: int, buffer: ReplayBuffer) -> dict:
+    def run_games(self, target_games: int, buffer: ReplayBuffer,
+                  save_callback=None, save_interval_s: float = 120.0) -> dict:
         """Run parallel self-play until target_games are completed.
 
         Safe to call repeatedly on the same instance — barriers are reset,
@@ -178,6 +180,13 @@ class ParallelSelfPlay:
         a delta from the entry point. Reusing one instance across training
         iterations avoids the per-iter SEGV we hit when constructing new
         pinned buffers and C++ workers every loop.
+
+        Intra-iter persistence: if `save_callback` is provided, it's
+        invoked at barrier boundaries every `save_interval_s` seconds.
+        This lets a process killed mid-iter preserve the partial
+        self-play progress already in the buffer — the restart resumes
+        with that data already loaded. Required to make forward progress
+        under the run4b shared-host SIGKILL failure mode.
         """
         self.net.eval()
         self.stop_event.clear()
@@ -213,6 +222,7 @@ class ParallelSelfPlay:
         PROGRESS_INTERVAL = float(
             os.environ.get("AZ_PROGRESS_INTERVAL", "30"))
         last_progress_t = t_start
+        last_save_t = t_start
 
         try:
             while total_games < target_games:
@@ -324,6 +334,22 @@ class ParallelSelfPlay:
                             flush=True,
                         )
                         last_progress_t = now
+
+                # Intra-iter buffer persistence — fire the callback at
+                # barrier boundaries (safe point: workers are about to
+                # restart ticks, main thread is otherwise idle). Cheap:
+                # the buffer.save_to path is atomic rename so partial
+                # writes are impossible, and the buffer is uint8 + float
+                # arrays ~3.6 GB that flush in a few seconds.
+                if save_callback is not None and save_interval_s > 0:
+                    now = time.time()
+                    if now - last_save_t >= save_interval_s:
+                        try:
+                            save_callback()
+                        except Exception as e:
+                            print(f"         | save_callback failed: {e}",
+                                  flush=True)
+                        last_save_t = time.time()
 
         finally:
             # Stop workers

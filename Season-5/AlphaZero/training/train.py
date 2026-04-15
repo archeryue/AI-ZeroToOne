@@ -274,8 +274,20 @@ def main():
         # 1. Parallel self-play — reuses the same sp instance each iter.
         # Workers pick up updated net weights automatically because self.net
         # is a reference to the same module we train.
+        #
+        # Intra-iter buffer persistence: pass a save callback so if the
+        # process is SIGKILL'd mid-iter (run4b shared-host failure mode),
+        # the partial self-play harvest is preserved on disk. Restart
+        # reloads the buffer and the next attempt picks up where the
+        # previous one died. Save interval default 120s, tune via
+        # AZ_SAVE_INTERVAL env var (0 disables).
         sp_start = time.time()
-        sp_stats = sp.run_games(train_cfg.num_games_per_iter, buffer)
+        save_interval = float(os.environ.get("AZ_SAVE_INTERVAL", "120"))
+        sp_stats = sp.run_games(
+            train_cfg.num_games_per_iter, buffer,
+            save_callback=lambda: buffer.save_to(buffer_path),
+            save_interval_s=save_interval,
+        )
         sp_time = time.time() - sp_start
 
         avg_moves = sp_stats['positions'] / max(sp_stats['games'], 1)

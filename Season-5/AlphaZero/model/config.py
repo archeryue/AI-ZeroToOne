@@ -35,6 +35,14 @@ class TrainingConfig:
     num_parallel_games: int = 256
     num_games_per_iter: int = 2048
     max_game_moves: int = 200  # max moves before forcing end
+    # Pass-collapse floor — below this move number, the pass action is
+    # stripped from the MCTS visit distribution before sampling. 0
+    # disables the gate (9x9 preset). 13x13 run4c sets this to 60
+    # because the derived-value architecture teaches the net to pass
+    # on "settled territory" from iter 0/1 late-game data, and the
+    # lesson leaks into early-game positions causing pass-pass game
+    # ends at move ~40-60. Stored policy target is unmodified.
+    pass_min_move: int = 0
 
     # Resign (v2 — see engine/worker.h SelfPlayConfig comment)
     resign_threshold: float = -0.90
@@ -120,15 +128,16 @@ CONFIGS = {
             num_simulations=400,
             dirichlet_alpha=0.07,  # ≈ 10 / avg_legal_moves (~150 for 13x13)
             num_games_per_iter=2048,
-            # Restored to 256 after raising MAX_TREE_NODES 200k → 1M.
-            # With the bigger cap per tree uses ~75 MB × 256 = ~19 GB
-            # for MCTS state, which still fits under the 35 GB budget
-            # alongside buffer + savez transient + model/compile
-            # (~30 GB total, ~5 GB headroom). The bigger GPU batch
-            # (256 × vl_batch(8) = 2048 vs 1024 at 128 parallel)
-            # amortizes per-tick CPU+sync overhead and gives ~20-40%
-            # faster iters.
-            num_parallel_games=256,
+            # run4b → run4c: dropped 256 → 128 to shrink peak RSS.
+            # run4b iter 2 died silently from host-level SIGKILL on the
+            # shared container (load avg 5-6, we were a top-3 RSS
+            # tenant at ~30 GB). Halving parallel games halves the
+            # MCTS tree state: ~19 GB → ~10 GB peak. Total RSS drops
+            # to ~20 GB, moving us out of the OOM-killer top-candidate
+            # range. GPU throughput is ~unchanged at 128 × vl_batch(8)
+            # = 1024 (still saturates a 4090 for a 15b×128ch net per
+            # HARDWARE_NOTES.md), so iter wall-time is essentially flat.
+            num_parallel_games=128,
             buffer_size=1_000_000,
             max_game_moves=250,
             # 13x13 games average ~120 moves (vs ~85 on 9x9). Keep
@@ -156,6 +165,15 @@ CONFIGS = {
             # second line of defense.
             resign_min_move=80,
             resign_threshold=-0.95,
+            # Pass-collapse floor — run4c observed iter 2 avg moves
+            # drop 182 → 69 because the iter-1-trained ownership head
+            # made MCTS see most positions as "settled" and sample
+            # pass, collapsing games via consecutive passes long
+            # before the 80-move resign floor. Blocking pass before
+            # move 60 forces games to play out the middlegame. 60
+            # ≈ 40 % of a healthy 170-move game; after move 60 the
+            # net is free to pass if territory is genuinely settled.
+            pass_min_move=60,
             # value_loss_weight=0.0 for run4 — this is NOT the same
             # "turn off the value head" as old runs; it only disables
             # the direct value-loss gradient. Value is now DERIVED

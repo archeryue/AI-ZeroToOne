@@ -978,3 +978,92 @@ collapsing like it did in run1/2/3 iter 1.
   `vlw=0.05`) once ownership is well-trained, for calibration
 
 ---
+
+# Section 4 — Run 4c/4d: resilience, pass-collapse, and the silent strength regression
+
+Three separate problems landed in one session, each surfacing only once the previous one was solved.
+
+## Problem A — silent-kill survivability (run4c)
+
+**Symptom.** Run4b iter 2+ self-play kept dying silently after ~5 min (no Python traceback, no OOM, no core). Diagnosed as probable external SIGKILL on a shared container (load avg 5–6, we were a ~30 GB RSS top-tenant).
+
+**Fixes landed as `run4c`.** Three changes that together survived 5+ iters:
+
+1. **`num_parallel_games` 256 → 128** (`model/config.py`). Halves MCTS tree state (~19 GB → ~10 GB peak). Per `HARDWARE_NOTES.md` the 4090 already saturates at 128 parallel, so GPU throughput is effectively unchanged; iter wall-time stays similar. This alone moved us out of the OOM-kill top-candidate range.
+2. **Intra-iter buffer persistence** (`parallel_self_play.py::run_games` accepts a `save_callback` + `save_interval_s`; default 120 s). `train.py` passes `buffer.save_to(buffer_path)`. If the process dies mid-iter, the already-harvested self-play positions survive — on restart the buffer reloads with the partial harvest and the next attempt picks up where the previous one died.
+3. **Shell watchdog** (`run_resilient.sh`). Relaunches `train.py --checkpoint <latest>` on non-zero exit, with MIN_RUNTIME_S crash-loop guard (60 s) and MAX_RETRIES cap. Forwards SIGINT/SIGTERM as user stops (rc 130/143).
+
+**Result.** Attempt 1 of run4c cleared 4 iters cleanly before hitting an **actual** segfault (rc=139, SIGSEGV + core dumped) at ~75 min of continuous runtime during iter 3 self-play. The heartbeat dump caught corrupt memory (`threading.py line 9651904`, a nonsense line number) — the corruption was already there when the dump fired, not caused by it. Watchdog auto-restarted; attempt 2 resumed from `checkpoint_0002.pt` with the partial iter 3 buffer preserved and iter 3 completed on the rerun. Training made forward progress despite the crash. Core dumps go through an apport pipe on this host, so no local file was available for post-mortem symbol analysis.
+
+**Open question.** Root cause of the segfault not identified. Candidates: MCTS tree-reset use-after-free (`reset()` called tens of thousands of times per iter with max-cap trees), torch inductor compile-worker subprocess drift, `faulthandler.dump_traceback_later` interrupting C++ in a non-signal-safe state, or long-run CUDA/pinned allocator drift. Mitigation is the watchdog; diagnosis deferred.
+
+## Problem B — pass-collapse (v1 fix)
+
+**Symptom.** Run4c iter 2 self-play produced **69 avg moves/game** (vs run4b iter 0/1 at 173/182). Games were ending via consecutive passes before move 80, despite the resign floor being at 80. The handover's earlier attribution to "resign firing early" was wrong — `resign_min_move=80` is a lower bound on *resignation*, not on *game length*. A 13×13 game can naturally terminate via `consecutive_passes >= 2` (`go.h:470`) at any move.
+
+**Root cause.** The iter 0/1 training buffer contained ~2× pass moves per game (the final two moves of every pass-pass ending), which is ~1–2 % of all recorded positions. Combined with the ownership head learning "territory is settled" after ~60 SGD steps, the policy overgeneralized "pass when territory looks settled" to early-game positions. Once both players at a self-play game landed on pass in the same window, the game ended short. Iter-2 self-play collapsed to ~69 moves/game; the policy was training on the collapsed distribution.
+
+**Fix (v1 — partial).** New `pass_min_move` config knob in `SelfPlayConfig` (and `TrainingConfig`, default 0 for 9×9, set to **60** on the 13×13 preset). In `worker.h::complete_move`, sample the played action from a local copy of `rec.policy` with `sample_policy[ACTIONS-1] = 0` when `move_num < pass_min_move`. Policy target in `rec.policy` left untouched (this is the part that was wrong — see Problem C).
+
+**Result.** Iter 2 rerun jumped to **130 avg moves/game**, iter 3 to 190, iter 4 to 208 (*above* run4b iter 0/1). Games generating longer by the iter — apparent positive feedback loop, architecture seemingly working.
+
+## Problem C — silent strength regression (the real bug)
+
+**Symptom.** With iter 2–5 completed, we ran `training/_eval_checkpoints.py`-style per-iter eval-vs-random (50 games, 100 sims/move, fresh subprocess each to avoid the multi-load hang the handover documented). Results:
+
+| iter | avg_moves | vs-random | pi_loss | own_loss |
+|---:|---:|---:|---:|---:|
+| 0 | 173 | **72.0 %** | 5.1689 | 0.6024 |
+| 1 | 182 | **3.3 %** ⚠️ | 5.0762 | 0.5163 |
+| 2 | 130 | **10.0 %** | 5.0392 | 0.5109 |
+| 3 | 190 | **22.0 %** | 4.9278 | 0.4884 |
+| 4 | 208 | **32.0 %** | 4.8866 | 0.4771 |
+| 5 | 227 | **0.0 %** ⚠️ | 4.8399 | 0.4633 |
+
+Iter 1 dropped 72 % → 3.3 % after only 30 more SGD steps on iter-1 self-play data. Iter 2–4 climbed back ~10 pp/iter but never reached iter 0's level. Iter 5 **completely collapsed** to 0/50 wins vs random.
+
+**Critical discovery.** Training losses (`pi`, `own`, total) dropped **monotonically across every iter**, including iter 1 and iter 5. The self-play `avg_moves` also climbed monotonically 130 → 190 → 208 → 227. None of the in-loop signals caught the regression. `run4b` never measured iter 1's eval because in-loop eval was disabled after iter 0 — we were flying blind on real strength.
+
+**Root cause.** Forward-pass diagnostic on iter 5 `checkpoint_0005.pt` against an empty 13×13 board:
+
+```
+value_scale=0.0200 (healthy, unchanged)
+policy argmax: 169 (PASS)
+policy top5: [169, 99, 33, 54, 70]
+logits range [-0.29, 2.94] with pass=2.94 peak
+```
+
+Running the same diagnostic across iters 0–5 on an empty board:
+
+| iter | pass_logit | pass_prob | pass_is_argmax |
+|---:|---:|---:|:---:|
+| 0 | +0.61 | 1.09 % | yes |
+| 1 | +1.11 | 1.77 % | yes |
+| 2 | +1.12 | 1.80 % | yes |
+| 3 | +1.34 | 2.23 % | yes |
+| 4 | +1.80 | 3.50 % | yes |
+| 5 | +2.94 | **10.27 %** | yes |
+
+Pass is argmax on an empty board for **every** checkpoint, and the pass prior grows monotonically. At iter 5 the prior crossed a threshold where MCTS 100-sim rollouts started committing visits to pass — at move 1 on an empty board, where the derived value sees "territory is undetermined" and every child Q ≈ 0, MCTS visit allocation is driven by the policy prior and pass wins the argmax. In `evaluate_vs_random` (which has no pass-gate, unlike self-play), the net played pass → opponent played random → net passed again → two consecutive passes → `end_game()` scored an empty board → komi goes to white → 0/50 losses. Self-play never exhibited this because the C++ pass-gate still blocked the played action below move 60; the *policy prior* was broken but the *played move* was not.
+
+**Why the v1 fix missed it.** v1 gated pass only in the *sampled action*, not in the *stored policy target*. MCTS still explored pass during search, visits still accumulated on the pass slot, and `s.tree->get_policy()` wrote those visits into `rec.policy` which got pushed to the replay buffer unchanged. Over many training iters the policy head slowly learned "pass has non-trivial probability in the opening" from those targets. Eventually the learned prior crossed the MCTS-visit-allocation threshold.
+
+**Fix (v2).** Two-line change in `worker.h::complete_move`: zero `rec.policy[ACTIONS-1]` **before** `push_back`, and renormalize the non-pass probabilities to sum to 1, whenever `move_num < pass_min_move`. The sampling code was simplified to sample directly from `rec.policy` since pass is already zeroed there for gated positions. The net will now see a stored target with strictly zero pass probability in early-game positions and can't learn to prefer pass in the opening.
+
+## Run4d — rollback and relaunch
+
+Decided to restart from `checkpoint_0000.pt` with a fresh buffer:
+
+- **Keep** iter 0's weights (72 % vs random, the only validated-strong checkpoint across the whole phase) — pass logit +0.61 is small enough for the fixed training to drive down over a few iters.
+- **Discard** `checkpoint_0001..5.pt` and the iter 0-5 replay buffer (all contained polluted targets and/or polluted priors). Backed up to `checkpoints/13x13_run4b_contaminated_iter1-5/` for post-mortem.
+- **Relaunch** via `run_resilient.sh` with `--games-per-iter 1024` (half of the 2048 baseline — per-iter wall-time drops from ~55 min to ~30 min, each crash costs proportionally less). Pass-floor v2 fix is in the engine the training loads.
+
+Success criterion at iter 1: **eval ≥ 60 % vs random** (keeps or improves iter 0's baseline). If iter 1 collapses again, the bug is deeper than pass-in-target and we need to reconsider the derived-value architecture.
+
+## Takeaways for the next session
+
+1. **Eval-vs-random per iter is mandatory for this architecture.** The previous "disable in-loop eval because it hangs" decision saved wall time but hid a catastrophic silent regression for 5 iters. Run the post-hoc eval loop (`run_eval_loop.sh`) in a separate process — one fresh subprocess per checkpoint avoids the accumulation hang.
+2. **Training losses are not predictive of strength for this architecture.** `pi_loss` and `own_loss` dropped monotonically while vs-random went 72 % → 3.3 % → ... → 0 %. Do not use loss trajectories as a training health check on the derived-value net.
+3. **`num_games_per_iter` directly trades iter wall-time for per-iter data volume.** Cutting 2048 → 1024 halved iter time and roughly halved the crash-recovery cost without visible quality impact so far (training samples from the full 1M buffer regardless).
+4. **Intra-iter buffer persistence + shell watchdog + shrunken MCTS footprint survived the run4b silent-kill regime.** Even when a real SIGSEGV hit, the watchdog resumed from the last checkpoint with partial iter data preserved.
+5. **Pass gating must cover the stored target, not just the sampled action.** Any auxiliary constraint that blocks an action in self-play must also remove it from the policy training target for the same positions, otherwise the net learns the forbidden action is "valid" via the MCTS visit distribution even when it can't actually be played.
