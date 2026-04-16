@@ -76,7 +76,8 @@ net = AlphaZeroNet(mcfg).to(device)
 print(f"Model: {mcfg.num_blocks}b × {mcfg.channels}ch, "
       f"{net.param_count():,} params")
 print(f"Config: vlw={tcfg.value_loss_weight}, slw={tcfg.score_loss_weight}, "
-      f"olw={tcfg.ownership_loss_weight}, pass_min={tcfg.pass_min_move}")
+      f"olw={tcfg.ownership_loss_weight}, pass_min={tcfg.pass_min_move}, "
+      f"playout_cap={tcfg.reduced_simulations}/{tcfg.num_simulations}")
 
 buffer = ReplayBuffer(tcfg.buffer_size, N)
 

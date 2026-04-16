@@ -50,6 +50,8 @@ def _make_sp_config(train_cfg: TrainingConfig) -> go_engine.SelfPlayConfig:
     cfg.resign_min_child_visits_frac = train_cfg.resign_min_child_visits_frac
     cfg.max_game_moves = train_cfg.max_game_moves
     cfg.pass_min_move = train_cfg.pass_min_move
+    cfg.reduced_simulations = train_cfg.reduced_simulations
+    cfg.full_search_prob = train_cfg.full_search_prob
     return cfg
 
 

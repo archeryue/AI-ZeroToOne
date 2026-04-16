@@ -44,6 +44,10 @@ class TrainingConfig:
     # ends at move ~40-60. Stored policy target is unmodified.
     pass_min_move: int = 0
 
+    # Playout cap randomization (KataGo-style). 0 = disabled.
+    reduced_simulations: int = 0
+    full_search_prob: float = 0.25
+
     # Resign (v2 — see engine/worker.h SelfPlayConfig comment)
     resign_threshold: float = -0.90
     resign_consecutive: int = 5
@@ -176,6 +180,10 @@ CONFIGS = {
             # second line of defense.
             resign_min_move=80,
             resign_threshold=-0.95,
+            # Playout cap: 25% full (400 sims), 75% reduced (100 sims).
+            # ~2.7× self-play speedup. All targets from game outcomes.
+            reduced_simulations=100,
+            full_search_prob=0.25,
             # Pass-collapse floor — run5 seed 300 showed 51% of games
             # ending at move 60-70 (right after the old floor of 60
             # lifted). Raising to 120 ≈ 67% of a healthy 180-move
@@ -197,10 +205,10 @@ CONFIGS = {
             # Dense per-cell labels regularize the trunk without
             # replacing the value head.
             ownership_loss_weight=1.5,
-            # Score bias regularization: anchors batch mean prediction
-            # to batch mean target. Run5 showed score head mean
-            # oscillating +0.11→-0.44→+0.22 causing eval swings.
-            score_bias_reg_weight=10.0,
+            # Score bias reg disabled — weight 10.0 crushed score std
+            # from 0.21 to 0.028, killing spatial differentiation.
+            # Seed 300 without it had wider value range and 60% eval peak.
+            score_bias_reg_weight=0.0,
             # Eval every iter instead of every 5 iters for run2's first
             # few iters — we need iter-by-iter strength visibility to
             # confirm the fix actually works. Can revert to 5 once the

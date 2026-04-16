@@ -170,5 +170,7 @@ nohup python3 -u -m training.train \
 
 | iter | total | pi | v | score | own | self-play time | avg moves | eval vs random | note |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 0 | 12.3837 | 5.1819 | 1.0052 | 6.1545 | 0.6161 | 1851.4s (30.9m) | 183 | **20.0%** | Pass not argmax. Score std=0.028 (low). 20% > seed 300's 10%. |
+| 1 | 11.1334 | 5.1583 | 1.0061 | 5.0901 | 0.5393 | 1686.4s (28.1m) | 162 | **13.3%** | Score mean flipped +0.13→-0.20. No pass-collapse. Eval 20→13%. |
 
 _(Append new iters as they land.)_

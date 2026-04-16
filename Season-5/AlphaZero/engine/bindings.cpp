@@ -317,6 +317,8 @@ PYBIND11_MODULE(go_engine, m) {
                        &Cfg::resign_min_child_visits_frac)
         .def_readwrite("max_game_moves", &Cfg::max_game_moves)
         .def_readwrite("pass_min_move", &Cfg::pass_min_move)
+        .def_readwrite("reduced_simulations", &Cfg::reduced_simulations)
+        .def_readwrite("full_search_prob", &Cfg::full_search_prob)
         ;
 
     bind_worker<9>(m, "SelfPlayWorker9");

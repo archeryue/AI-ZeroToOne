@@ -55,6 +55,12 @@ struct SelfPlayConfig {
     // genuinely explored it), only the PLAYED move is gated. Set to
     // 0 to disable (9x9 preset leaves this at 0).
     int pass_min_move = 0;
+    // Playout cap randomization (KataGo-style). Each move gets a coin
+    // flip: full_search_prob → full sims, else → reduced sims. ~2.7×
+    // self-play speedup. All targets (policy, score, ownership) come
+    // from game outcomes, not search estimates, so no masking needed.
+    int reduced_simulations = 0;      // 0 = disabled (use num_simulations for all)
+    float full_search_prob = 0.25f;
 };
 
 template<int N>
@@ -114,6 +120,7 @@ private:
         int nn_count = 0;        // NN evals from last tick_select
 
         int sims_done = 0;
+        int sims_target = 0;    // per-move target (playout cap)
         int move_num = 0;
         bool active = false;
         bool game_resigned = false;  // true if game ended by resignation
@@ -144,6 +151,7 @@ private:
         s.tree = std::make_unique<mcts::MCTSTree<N>>(
             s.game, cfg_.c_puct, cfg_.dirichlet_alpha, cfg_.dirichlet_epsilon);
         s.sims_done = 0;
+        s.sims_target = cfg_.num_sims;  // first move always full search
         s.move_num = 0;
         s.active = true;
         s.nn_count = 0;
@@ -285,6 +293,14 @@ private:
         }
 
         s.sims_done = 0;
+        // Playout cap randomization: coin flip for full vs reduced sims
+        if (cfg_.reduced_simulations > 0) {
+            std::uniform_real_distribution<float> coin(0.0f, 1.0f);
+            s.sims_target = (coin(rng_) < cfg_.full_search_prob)
+                ? cfg_.num_sims : cfg_.reduced_simulations;
+        } else {
+            s.sims_target = cfg_.num_sims;
+        }
         s.move_num++;
 
         // Check game end
@@ -352,7 +368,7 @@ public:
 
             s.sims_done += batch;
 
-            if (s.sims_done >= cfg_.num_sims)
+            if (s.sims_done >= s.sims_target)
                 complete_move(i);  // may set active=false
         }
     }
