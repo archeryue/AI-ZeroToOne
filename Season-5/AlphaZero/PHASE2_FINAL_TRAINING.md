@@ -175,5 +175,12 @@ Added playout cap (100/400 sims) for 2.3× speedup.
 | iter | total | pi | v | score | own | self-play time | avg moves | eval vs random | note |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | 0 | 11.1648 | 5.2075 | 1.0185 | 4.8643 | 0.7287 | 854.0s (14.2m) | 182 | **66.7%** | Best iter-0 in Phase 2! 2.3× speedup. Score std=0.113, pass=0.56%. |
+| 1 | 10.6024 | 5.1687 | 1.0776 | 4.5839 | 0.5665 | 856.2s (14.3m) | 180 | **53.3%** | HELD above 50%! First non-collapse iter 1 in Phase 2. Score stable, no pass-collapse. |
+| 2 | 10.2239 | 5.1488 | 1.1542 | 4.2517 | 0.5489 | 867.4s (14.5m) | 183 | **60.0%** | Stable! 66.7→53.3→60.0%. All losses improving. No pass-collapse. |
+| 3 | 9.6687 | 5.1332 | 1.1338 | 3.7233 | 0.5415 | 871.7s (14.5m) | 181 | **16.7%** | Eval dipped (score mean flipped +0.12). Mild oscillation continues. |
+| 4 | 8.9854 | 5.1254 | 1.1523 | 3.0506 | 0.5396 | 625.6s (10.4m) | 136 | **16.7%** | Plateaued at ~17%. Games shortening (136). |
+| 5 | 8.7189 | 5.1175 | 1.1831 | 2.8096 | 0.5279 | 634.8s (10.6m) | 131 | **3.3%** | Dip. Games shortening. |
+| 6 | 7.9952 | 5.1031 | 1.1625 | 2.1032 | 0.5259 | 649.0s (10.8m) | 137 | **16.7%** | Recovered from 3.3%. Score loss 2.10. Games stabilized ~137. |
+| 7 | 7.3938 | 5.0651 | 1.1768 | 1.5472 | 0.5210 | 838.4s (14.0m) | 177 | (pending) | Games rebounded 137→177! Score loss 1.55 (best yet). |
 
 _(Append new iters as they land.)_
