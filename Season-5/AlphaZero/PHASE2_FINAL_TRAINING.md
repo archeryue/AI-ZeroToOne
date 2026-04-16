@@ -183,6 +183,6 @@ Added playout cap (100/400 sims) for 2.3× speedup.
 | 6 | 7.9952 | 5.1031 | 1.1625 | 2.1032 | 0.5259 | 649.0s (10.8m) | 137 | **16.7%** | Recovered from 3.3%. Score loss 2.10. Games stabilized ~137. |
 | 7 | 7.3938 | 5.0651 | 1.1768 | 1.5472 | 0.5210 | 838.4s (14.0m) | 177 | **20.0%** | Games rebounded 137→177. Eval recovering 3→17→20%. |
 | 8 | 6.7863 | 5.0129 | 1.2269 | 1.0043 | 0.5128 | 890.8s (14.8m) | 189 | **66.7%** | Back to peak! Score loss 1.0, games 189, pi 5.01. Best metrics overall. |
-| 9 | 6.4702 | 4.9868 | 1.3216 | 0.7221 | 0.5075 | 814.7s (13.6m) | 177 | (pending) | Score loss 0.72 (new low). pi broke 5.0! Policy sharpening. |
+| 9 | 6.4702 | 4.9868 | 1.3216 | 0.7221 | 0.5075 | 814.7s (13.6m) | 177 | **70.0%** | NEW ALL-TIME HIGH! Score 0.72, pi 4.99. Model genuinely improving. |
 
 _(Append new iters as they land.)_
