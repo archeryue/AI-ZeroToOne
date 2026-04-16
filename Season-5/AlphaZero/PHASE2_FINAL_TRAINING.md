@@ -146,5 +146,6 @@ nohup python3 -u -m training.train \
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | 0 | 11.2340 | 5.1875 | 1.0623 | 5.0548 | 0.6611 | 1680.5s (28.0m) | 166 | **10.0%** | score_loss=5.05 (was 555 before fix). Value range [-0.50,+0.44]. Pass not argmax. |
 | 1 | 9.9154 | 5.1526 | 1.1220 | 3.8926 | 0.5801 | 1175.3s (19.6m) | 123 | **60.0%** | FIRST iter-1 improvement in Phase 2! 10→60%. Score head working. |
+| 2 | 9.5725 | 5.1278 | 1.1118 | 3.6156 | 0.5527 | 2332.1s (38.9m) | 213 | **13.3%** | Losses improving but eval regressed 60→13%. Value range widened. Investigating. |
 
 _(Append new iters as they land.)_
