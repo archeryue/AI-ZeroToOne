@@ -162,15 +162,18 @@ nohup python3 -u -m training.train \
     --board-size 13 --iterations 60 --num-workers 5 \
     --games-per-iter 1024 \
     --output-dir checkpoints/13x13_run5 \
-    --seed 400 \
+    --seed 500 \
     > logs/13x13_run5.log 2>&1 &
 ```
+
+Seed 400 (bias reg=10, no playout cap) ran 2 iters: eval 20→13%.
+Bias reg crushed score std (0.028 vs 0.21). Dropped for seed 500.
+Added playout cap (100/400 sims) for 2.3× speedup.
 
 ### Progress log
 
 | iter | total | pi | v | score | own | self-play time | avg moves | eval vs random | note |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 0 | 12.3837 | 5.1819 | 1.0052 | 6.1545 | 0.6161 | 1851.4s (30.9m) | 183 | **20.0%** | Pass not argmax. Score std=0.028 (low). 20% > seed 300's 10%. |
-| 1 | 11.1334 | 5.1583 | 1.0061 | 5.0901 | 0.5393 | 1686.4s (28.1m) | 162 | **13.3%** | Score mean flipped +0.13→-0.20. No pass-collapse. Eval 20→13%. |
+| 0 | 11.1648 | 5.2075 | 1.0185 | 4.8643 | 0.7287 | 854.0s (14.2m) | 182 | **66.7%** | Best iter-0 in Phase 2! 2.3× speedup. Score std=0.113, pass=0.56%. |
 
 _(Append new iters as they land.)_
