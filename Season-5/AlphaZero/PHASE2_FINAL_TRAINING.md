@@ -181,6 +181,7 @@ Added playout cap (100/400 sims) for 2.3× speedup.
 | 4 | 8.9854 | 5.1254 | 1.1523 | 3.0506 | 0.5396 | 625.6s (10.4m) | 136 | **16.7%** | Plateaued at ~17%. Games shortening (136). |
 | 5 | 8.7189 | 5.1175 | 1.1831 | 2.8096 | 0.5279 | 634.8s (10.6m) | 131 | **3.3%** | Dip. Games shortening. |
 | 6 | 7.9952 | 5.1031 | 1.1625 | 2.1032 | 0.5259 | 649.0s (10.8m) | 137 | **16.7%** | Recovered from 3.3%. Score loss 2.10. Games stabilized ~137. |
-| 7 | 7.3938 | 5.0651 | 1.1768 | 1.5472 | 0.5210 | 838.4s (14.0m) | 177 | (pending) | Games rebounded 137→177! Score loss 1.55 (best yet). |
+| 7 | 7.3938 | 5.0651 | 1.1768 | 1.5472 | 0.5210 | 838.4s (14.0m) | 177 | **20.0%** | Games rebounded 137→177. Eval recovering 3→17→20%. |
+| 8 | 6.7863 | 5.0129 | 1.2269 | 1.0043 | 0.5128 | 890.8s (14.8m) | 189 | (pending) | Score loss below 1.0! Games 189 avg (highest). pi_loss broke 5.05. |
 
 _(Append new iters as they land.)_
