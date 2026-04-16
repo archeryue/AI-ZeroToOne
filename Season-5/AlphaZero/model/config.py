@@ -79,6 +79,10 @@ class TrainingConfig:
     # preserves the 9x9 recipe; 13x13 preset turns it on. The score
     # head predicts territory margin and value is derived from it.
     score_loss_weight: float = 0.0
+    # Score bias regularization weight. Penalizes deviation of batch
+    # mean prediction from batch mean target. Prevents the score
+    # head's bias from oscillating across iters.
+    score_bias_reg_weight: float = 0.0
 
     # Checkpointing
     checkpoint_interval: int = 10  # iterations between checkpoints
@@ -172,15 +176,12 @@ CONFIGS = {
             # second line of defense.
             resign_min_move=80,
             resign_threshold=-0.95,
-            # Pass-collapse floor — run4c observed iter 2 avg moves
-            # drop 182 → 69 because the iter-1-trained ownership head
-            # made MCTS see most positions as "settled" and sample
-            # pass, collapsing games via consecutive passes long
-            # before the 80-move resign floor. Blocking pass before
-            # move 60 forces games to play out the middlegame. 60
-            # ≈ 40 % of a healthy 170-move game; after move 60 the
-            # net is free to pass if territory is genuinely settled.
-            pass_min_move=60,
+            # Pass-collapse floor — run5 seed 300 showed 51% of games
+            # ending at move 60-70 (right after the old floor of 60
+            # lifted). Raising to 120 ≈ 67% of a healthy 180-move
+            # game. This ensures the middlegame is fully played out
+            # and the buffer contains well-resolved territory data.
+            pass_min_move=120,
             # Value loss weight 0: value is derived from score head,
             # not trained directly. Score loss + ownership loss train
             # the trunk; value reads off the score prediction.
@@ -196,6 +197,10 @@ CONFIGS = {
             # Dense per-cell labels regularize the trunk without
             # replacing the value head.
             ownership_loss_weight=1.5,
+            # Score bias regularization: anchors batch mean prediction
+            # to batch mean target. Run5 showed score head mean
+            # oscillating +0.11→-0.44→+0.22 causing eval swings.
+            score_bias_reg_weight=10.0,
             # Eval every iter instead of every 5 iters for run2's first
             # few iters — we need iter-by-iter strength visibility to
             # confirm the fix actually works. Can revert to 5 once the

@@ -140,6 +140,7 @@ class ReplayBuffer:
 
         self.size = 0
         self.index = 0
+        self._sample_weights = None  # lazily computed, invalidated on push/load
 
     def push(self, obs: np.ndarray, policy: np.ndarray, value: float,
              ownership: np.ndarray):
@@ -157,6 +158,7 @@ class ReplayBuffer:
         self.ownership[idx] = ownership.astype(np.int8, copy=False)
         self.index += 1
         self.size = min(self.size + 1, self.capacity)
+        self._sample_weights = None  # invalidate — buffer changed
 
     def _store(self, obs: np.ndarray, policy: np.ndarray, value: float,
                ownership: np.ndarray = None):
@@ -180,14 +182,28 @@ class ReplayBuffer:
         runs once on a contiguous sub-batch — much faster than a
         per-sample Python loop.
 
+        Positions from clearly-decided games (|value| > 0.95) are
+        downweighted to 10% sampling probability (KataGo-style).
+        This prevents endgame outliers from dominating gradient noise
+        on the score head bias.
+
         Returns (obs, policy, value, ownership). Ownership added in
         run4 for the auxiliary loss head.
         """
         N = self.board_size
-        # Sample positions uniformly with replacement (replacement is
-        # fine here: 256-batch from a 300K buffer, collision odds are
-        # ~1/1000 per pair and don't bias the gradient).
-        indices = np.random.randint(0, self.size, size=batch_size)
+
+        # Build sampling weights: downweight decided positions.
+        # Recompute lazily when buffer grows (cheap — one vectorized op).
+        if (self._sample_weights is None
+                or len(self._sample_weights) != self.size):
+            w = np.ones(self.size, dtype=np.float32)
+            decided = np.abs(self.value[:self.size]) > 0.95
+            w[decided] = 0.1
+            w /= w.sum()
+            self._sample_weights = w
+
+        indices = np.random.choice(self.size, size=batch_size,
+                                   replace=True, p=self._sample_weights)
         sym_choices = np.random.randint(0, 8, size=batch_size)
 
         raw_obs = self.obs[indices]              # (B, 17, N, N)
@@ -262,6 +278,7 @@ class ReplayBuffer:
         # ownership_loss_weight should be 0 for such runs).
         self.size = n
         self.index = n
+        self._sample_weights = None  # invalidate — new data loaded
 
     def __len__(self) -> int:
         return self.size

@@ -111,9 +111,19 @@ class Trainer:
             else:
                 ownership_loss = torch.zeros((), device=self.device)
 
+            # Score bias regularization: penalize deviation of batch
+            # mean prediction from batch mean target. Prevents the
+            # score FC bias from oscillating across iters.
+            sbr_w = getattr(self.cfg, "score_bias_reg_weight", 0.0)
+            if sbr_w > 0.0 and score_w > 0.0:
+                score_bias_penalty = (score_pred.mean() - target_score.mean()).pow(2)
+            else:
+                score_bias_penalty = torch.zeros((), device=self.device)
+
             loss = (policy_loss
                     + self.cfg.value_loss_weight * value_loss
                     + score_w * score_loss
+                    + sbr_w * score_bias_penalty
                     + own_w * ownership_loss)
 
         # NaN / Inf guard
