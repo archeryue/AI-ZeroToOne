@@ -81,9 +81,10 @@ class AlphaZeroNet(nn.Module):
         # that map raw score margin → win probability:
         #   value = tanh(value_scale * score_pred + value_bias)
         # Score is raw territory margin (range ±50 typical on 13x13).
-        # Scale init 0.05: tanh(0.05 * ±20) ≈ ±0.76 (a 20-point
-        # lead). Bias init 0: no prior.
-        self.value_scale = nn.Parameter(torch.tensor(0.05))
+        # Score is /N-normalized territory margin (std≈1.5).
+        # Scale init 1.0: tanh(1.0 * ±1.5) ≈ ±0.91 (a 1-std lead).
+        # Bias init 0: no prior.
+        self.value_scale = nn.Parameter(torch.tensor(1.0))
         self.value_bias = nn.Parameter(torch.tensor(0.0))
 
         # Ownership head: Conv1x1(ch→1) → (B, 1, N, N) logits.

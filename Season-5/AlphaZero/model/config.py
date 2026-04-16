@@ -185,10 +185,10 @@ CONFIGS = {
             # not trained directly. Score loss + ownership loss train
             # the trunk; value reads off the score prediction.
             value_loss_weight=0.0,
-            # Score loss weight: MSE on raw territory margin (±50
-            # typical on 13x13). Cold MSE ~130. Weight 0.01 →
-            # contribution ~1.3 ≈ 15% of total loss.
-            score_loss_weight=0.01,
+            # Score loss weight: MSE on /N-normalized territory margin
+            # (std≈1.5). Cold MSE ≈ 2.4. Weight 1.0 → contribution
+            # ~2.4 ≈ 30% of total loss at init — strong gradient.
+            score_loss_weight=1.0,
             # 50 steps × batch 1024 = 51,200 samples/iter ≈ 29%
             # coverage of the ~175k positions from 1024 games/iter.
             train_steps_per_iter=50,

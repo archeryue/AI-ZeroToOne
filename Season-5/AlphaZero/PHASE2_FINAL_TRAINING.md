@@ -301,4 +301,5 @@ Value MLP (44k params) memorized at every config. Replaced with:
 
 | iter | total | pi | v | score | own | self-play time | avg moves | games/s | eval vs random | note |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 0 | 6.0595 | 5.1292 | 1.0450 | 0.0193 | 0.6073 | 1496.9s (25.0m) | 150 | 0.7 | (pending) | Score head arch. v=1.05 at cold floor (can't memorize). |
+| 0 | 11.6449 | 5.1743 | 0.9999 | 555.26 | 0.6120 | 1484.4s (24.7m) | 151 | 0.7 | **0.0%** | v=1.00 at cold floor — score head can't memorize. 0% because score head stuck near zero (see diagnosis below). |
+| 1 | 10.3350 | 5.1155 | 1.0017 | 440.28 | 0.5444 | 1768.8s (29.5m) | 184 | 0.6 | **0.0%** | Score loss dropped 555→440 but head still predicting ~0. Derived value ≈ 0.016 for all positions — MCTS blind. |

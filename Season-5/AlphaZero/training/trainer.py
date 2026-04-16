@@ -78,11 +78,11 @@ class Trainer:
             self.device).float()
         # BCE target in [0, 1]. Dame cells (0) → 0.5.
         target_ownership_01 = (target_ownership + 1.0) / 2.0
-        # Score target: sum of ownership per cell = territory margin
-        # from current player's perspective. Raw range roughly ±50
-        # on 13x13 (typical ±15-25). score_loss_weight is set small
-        # (0.01) to balance against policy loss (~5).
-        target_score = target_ownership.sum(dim=(1, 2))  # (B,)
+        # Score target: territory margin normalized by board side length.
+        # Raw sum is ±50 typical on 13x13; dividing by N gives std≈1.5,
+        # near unit scale for stable MSE gradients with weight=1.0.
+        N = target_ownership.shape[1]  # board side length
+        target_score = target_ownership.sum(dim=(1, 2)) / N  # (B,)
 
         with torch.amp.autocast("cuda", enabled=self.device.type == "cuda"):
             logits, value, ownership_logits, score_pred = self.net(obs)
