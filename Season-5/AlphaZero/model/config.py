@@ -174,33 +174,17 @@ CONFIGS = {
             # ≈ 40 % of a healthy 170-move game; after move 60 the
             # net is free to pass if territory is genuinely settled.
             pass_min_move=60,
-            # value_loss_weight=0.0 for run4 — this is NOT the same
-            # "turn off the value head" as old runs; it only disables
-            # the direct value-loss gradient. Value is now DERIVED
-            # from ownership (see model/network.py AlphaZeroNet): the
-            # value head has only two learnable scalars (value_scale,
-            # value_bias) and its output is tanh(k·Σ(2σ(own_logits)−1)+b).
-            #
-            # The offline A/B (training/_phase2_run4_offline_ab.py)
-            # showed that with derived value, any nonzero vlw hijacks
-            # the ownership head into predicting per-cell values that
-            # sum to noisy game outcomes — directly conflicting with
-            # the ownership loss's "predict real territory" target.
-            # With vlw=0, ownership loss alone trains the ownership
-            # head on dense per-cell real-game labels, and derived
-            # value reads off that. A6 recipe achieved held-out
-            # v_mse=0.9631 — the ONLY recipe across run1/2/3/4 offline
-            # A/Bs that went below the cold floor of ~1.00.
-            value_loss_weight=0.0,
-            # train_steps_per_iter=30 to prevent per-iter overfit.
-            # 30*60=1800 SGD steps total; with ownership's 169x
-            # supervision density, effective label count is ~300k
-            # per-cell targets across the run.
-            train_steps_per_iter=30,
-            # Ownership weight 2.0 — the primary (and effectively
-            # only, with vlw=0) supervision signal for the trunk
-            # and the derived-value readout. Offline A/B winner.
-            ownership_loss_weight=2.0,
+            # Standard loss: policy + value + ownership auxiliary.
+            # Reverted from run4's vlw=0 / derived-value experiment.
+            # Value head is now a standard MLP (same as 9x9 / AlphaGo
+            # Zero). Ownership head is a KataGo-style auxiliary that
+            # regularizes the trunk with dense per-cell supervision.
+            value_loss_weight=1.0,
+            train_steps_per_iter=100,
+            # Ownership weight 1.5 — KataGo-range auxiliary supervision.
+            # Dense per-cell labels regularize the trunk without
+            # replacing the value head.
+            ownership_loss_weight=1.5,
             # Eval every iter instead of every 5 iters for run2's first
             # few iters — we need iter-by-iter strength visibility to
             # confirm the fix actually works. Can revert to 5 once the
