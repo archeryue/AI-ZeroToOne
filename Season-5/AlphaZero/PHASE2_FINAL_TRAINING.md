@@ -1,7 +1,8 @@
 # Phase 2 Final Training — 13x13 Go AlphaZero (Run 5)
 
 Living document for the 13x13 Phase 2 final run. Previous runs (1-4d)
-are documented in `PHASE_TWO_TRAINING.md`.
+are documented in `PHASE_TWO_TRAINING.md`. Pass/resign research in
+`PASS_RESIGN_RESEARCH.md`.
 
 ---
 
@@ -47,7 +48,7 @@ Grad clip:       max_norm=5.0
 Dirichlet:       α=0.07, ε=0.25
 Temperature:     τ=1.0 for first 40 moves, then τ=0.25
 Max game moves:  250
-Pass floor:      pass_min_move=60 (zeroed in both action + target)
+Pass floor:      pass_min_move=120 (zeroed in both action + target)
 Resign:          thresh=-0.95, consec=5, min_move=80,
                  disabled_frac=0.20, min_child_visits_frac=0.05
 ```
@@ -55,13 +56,22 @@ Resign:          thresh=-0.95, consec=5, min_move=80,
 ### Loss function
 
 ```
-L = -π·log(p) + 1.0·(score_target - score_pred)² + 1.5·BCE(own) + 1e-4·||θ||²
+L = -π·log(p) + 1.0·score_MSE + 10.0·score_bias_reg + 1.5·BCE(own) + 1e-4·||θ||²
 ```
 
 - **Policy**: cross-entropy with MCTS visit distribution
 - **Score**: MSE on /N-normalized territory margin (std≈1.5)
+- **Score bias reg**: `10.0 * (score_pred.mean() - target.mean())²`
+  Anchors batch mean prediction to batch mean target. Prevents score
+  head bias oscillation (+0.11→-0.44→+0.22) that caused eval swings.
 - **Ownership**: per-cell BCE-with-logits ({-1,0,+1} → {0,0.5,1})
 - **Value loss weight = 0**: value is derived from score, not trained directly
+
+### Sampling
+
+Decided-position downweighting (KataGo-style): positions with
+|value| > 0.95 sampled at 10% rate. Prevents endgame outliers from
+dominating gradient noise on the score head.
 
 ---
 
@@ -70,12 +80,12 @@ L = -π·log(p) + 1.0·(score_target - score_pred)² + 1.5·BCE(own) + 1e-4·||�
 **GREEN** (let it run):
 - `score_loss` decreasing or flat across iters 0→5
 - `eval_vs_random` ≥ 15% by iter 5, non-regressing
-- `avg_moves/game` stays in 100-200 range
+- `avg_moves/game` stays in 120-200 range
 - Memory stable, no OOM
 
 **RED** (kill, investigate):
 - `eval_vs_random` stuck at 0% for 3 consecutive iters
-- `avg_moves/game` < 80 (resign or pass collapse)
+- `avg_moves/game` < 100 (pass collapse despite floor at 120)
 - Score predictions have no variance (value signal dead)
 - Any crash / OOM
 
@@ -85,17 +95,29 @@ L = -π·log(p) + 1.0·(score_target - score_pred)² + 1.5·BCE(own) + 1e-4·||�
 
 **Why score head instead of value MLP?** The 44k-param value MLP
 memorized cold ±1 labels in <1 epoch across runs 1-3 and the
-standard-value-MLP restart (see failed attempts below). The 5.5k-param
-score head predicts territory margin — denser signal than binary
-win/loss, fewer params, can't memorize.
+standard-value-MLP restart. The 5.5k-param score head predicts
+territory margin — denser signal, fewer params, can't memorize.
 
 **Why LayerNorm?** BatchNorm's running stats caused train/eval drift
-in Phase 1 (Problem 3) and were a candidate for Phase 2 strength
-drift. LayerNorm has no running state. KataGo uses LayerNorm.
+in Phase 1 and Phase 2. LayerNorm has no running state. KataGo uses it.
 
 **Why ownership head?** 169× supervision density vs scalar value.
-Regularizes the trunk with dense spatial labels from the start.
-Training-only auxiliary (zero MCTS inference cost). Same as KataGo.
+Regularizes the trunk with dense spatial labels. Training-only
+auxiliary (zero MCTS inference cost). Same as KataGo.
+
+**Why pass_min_move=120?** Seed 300 showed 51% of games ending at
+move 60-70 (right after the old floor of 60 lifted). 73% of iter 3
+positions had >80 dame cells — garbage territory data. 120 ensures
+the middlegame is fully played out.
+
+**Why score bias regularization?** Seed 300 showed score head mean
+oscillating +0.11→-0.44→+0.22 across iters while training losses
+improved monotonically. This caused eval swings (10→60→13→17→33%).
+The regularization anchors the mean without affecting spatial learning.
+
+**Why downweight decided positions?** Endgame positions (3.8% of
+buffer) have score targets 10× the median, creating high-variance
+gradient noise on the score FC bias. KataGo downweights to 10%.
 
 ---
 
@@ -103,31 +125,35 @@ Training-only auxiliary (zero MCTS inference cost). Same as KataGo.
 
 ### Attempt 1: Standard value MLP + LayerNorm (seed 42, batch 256)
 
-Eval degraded 32→14→6% over 3 iters. Value MLP memorized despite
-LayerNorm and ownership auxiliary.
+Eval degraded 32→14→6%. Value MLP memorized despite ownership aux.
 
 ### Attempt 2: Bigger batch (seed 100, batch 1024, lr 0.00125)
 
-Eval 43→0% at iter 1. v_loss crossed cold floor (1.01 > 1.0).
-Bigger batch did NOT prevent value head overfit.
+Eval 43→0% at iter 1. Bigger batch did NOT prevent value overfit.
 
 ### Attempt 3: Score head, unnormalized targets (seed 200)
 
-Score head architecture correct — v_loss stuck at cold floor (can't
-memorize). But score targets were raw territory margin (±50 range)
-with score_loss_weight=0.01. Score head got near-zero gradient,
-predicted ~0 for all positions. Derived value ≈ 0.016 everywhere.
-MCTS blind. Eval 0%/0% at iters 0-1.
+Score head predicted ~0 for all positions. Target was raw territory
+margin (±50) with weight 0.01 — near-zero gradient. Eval 0%/0%.
+**Fix:** normalize by /N, weight=1.0, value_scale=1.0.
 
-**Root cause**: implementation bug — target not normalized by /N.
-Fixed: `target_score = ownership.sum() / N`, `score_loss_weight=1.0`,
-`value_scale=1.0`. Verified by `_test_correctness.py` stage 4.
+### Attempt 4: Score head, normalized targets (seed 300)
+
+First ever iter-1 improvement (10→60%). But two problems emerged:
+1. **Score bias oscillation**: mean swung +0.11→-0.44→+0.22, causing
+   eval swings 10→60→13→17→33%. Training losses not predictive.
+2. **Pass-collapse**: 51% of games ended at move 60-70 after pass
+   floor lifted. Buffer filled with poorly-resolved positions (73%
+   with >80 dame cells at iter 3). Avg moves: 166→123→213→82→74.
+
+**Fixes applied for current run:** pass_min=120, score bias reg=10.0,
+decided-position downweighting at 10%.
 
 ---
 
-## Current run: score head with /N normalization (seed 300)
+## Current run (seed 400)
 
-Score head with proper target normalization. Fresh start.
+All fixes applied. Fresh start.
 
 ```bash
 PYTHONPATH=engine PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 \
@@ -136,7 +162,7 @@ nohup python3 -u -m training.train \
     --board-size 13 --iterations 60 --num-workers 5 \
     --games-per-iter 1024 \
     --output-dir checkpoints/13x13_run5 \
-    --seed 300 \
+    --seed 400 \
     > logs/13x13_run5.log 2>&1 &
 ```
 
@@ -144,10 +170,5 @@ nohup python3 -u -m training.train \
 
 | iter | total | pi | v | score | own | self-play time | avg moves | eval vs random | note |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 0 | 11.2340 | 5.1875 | 1.0623 | 5.0548 | 0.6611 | 1680.5s (28.0m) | 166 | **10.0%** | score_loss=5.05 (was 555 before fix). Value range [-0.50,+0.44]. Pass not argmax. |
-| 1 | 9.9154 | 5.1526 | 1.1220 | 3.8926 | 0.5801 | 1175.3s (19.6m) | 123 | **60.0%** | FIRST iter-1 improvement in Phase 2! 10→60%. Score head working. |
-| 2 | 9.5725 | 5.1278 | 1.1118 | 3.6156 | 0.5527 | 2332.1s (38.9m) | 213 | **13.3%** | Losses improving but eval regressed 60→13%. Score bias oscillation. |
-| 3 | 9.0416 | 5.1112 | 1.1376 | 3.1052 | 0.5502 | 743.4s (12.4m) | 82 | **16.7%** | Pass-collapse: 51% of games end at move 60-70 (right after pass floor lifts). |
-| 4 | 8.6173 | 5.0983 | 1.1345 | 2.6935 | 0.5503 | 768.5s (12.8m) | 74 | **33.3%** | Pass-collapse continues but eval rebounded 17→33%. |
 
 _(Append new iters as they land.)_
