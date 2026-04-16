@@ -36,7 +36,7 @@ def make_evaluator(net: torch.nn.Module, device: torch.device):
         with torch.no_grad(), torch.amp.autocast("cuda", enabled=device.type == "cuda"):
             # Net returns (policy_logits, value, ownership_logits) since
             # run4; MCTS only needs policy + value.
-            logits, values, _own = net(obs)
+            logits, values, _own, _score = net(obs)
             policies = torch.softmax(logits, dim=-1)
         return policies.cpu().numpy(), values.cpu().numpy()
     return evaluator
@@ -135,9 +135,9 @@ def play_one_game(
     else:
         game_result = -1.0
 
-    # Per-cell ownership at game end (Tromp-Taylor, absolute frame).
-    # Same source as the C++ worker — the auxiliary supervision target
-    # for the run4 ownership head. See PHASE_TWO_TRAINING.md.
+    # Per-cell ownership at game end (Tromp-Taylor). For natural endings
+    # this is exact. For resigned games (move 80+) it's noisy but
+    # directionally correct — most territory is established by then.
     abs_ownership = np.array(game.compute_ownership(), dtype=np.int8)
 
     # Fill in values + per-record ownership in current-player perspective.

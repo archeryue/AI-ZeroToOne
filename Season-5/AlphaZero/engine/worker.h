@@ -116,6 +116,7 @@ private:
         int sims_done = 0;
         int move_num = 0;
         bool active = false;
+        bool game_resigned = false;  // true if game ended by resignation
 
         std::vector<MoveRecord> records;
         int consecutive_low = 0;
@@ -148,6 +149,7 @@ private:
         s.nn_count = 0;
         s.records.clear();
         s.consecutive_low = 0;
+        s.game_resigned = false;
         auto dist = std::uniform_real_distribution<float>(0.0f, 1.0f);
         s.disable_resign = dist(rng_) < cfg_.resign_disabled_frac;
     }
@@ -161,11 +163,11 @@ private:
 
         float result = (s.game.status == go::BLACK_WIN) ? 1.0f : -1.0f;
 
-        // Compute per-cell ownership ONCE at game end (Tromp-Taylor on
-        // the final board). Each MoveRecord then gets a copy flipped
-        // into that record's current-player perspective. This is the
-        // KataGo-style auxiliary supervision target — 169 dense labels
-        // per position vs the single scalar value label per game.
+        // Per-cell ownership via Tromp-Taylor scoring on the current
+        // board. For natural endings this is exact. For resigned games
+        // (move 80+) it's noisy but directionally correct — most
+        // territory is established by then, and 20% of games never
+        // resign so there's always a stream of clean labels.
         int8_t abs_ownership[CELLS];
         s.game.board.compute_ownership(abs_ownership);
 
@@ -252,6 +254,7 @@ private:
                 s.consecutive_low = 0;
 
             if (s.consecutive_low >= cfg_.resign_consecutive) {
+                s.game_resigned = true;
                 s.game.resign(s.game.current_turn);
                 finish_game(idx);
                 return;

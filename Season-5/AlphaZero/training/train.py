@@ -307,6 +307,7 @@ def main():
             print(f"         | Train: loss={tr_stats['loss']:.4f} "
                   f"(pi={tr_stats['policy_loss']:.4f}, "
                   f"v={tr_stats['value_loss']:.4f}, "
+                  f"score={tr_stats.get('score_loss', 0.0):.4f}, "
                   f"own={tr_stats.get('ownership_loss', 0.0):.4f}), "
                   f"lr={tr_stats['lr']:.6f}, {tr_time:.1f}s", flush=True)
         else:

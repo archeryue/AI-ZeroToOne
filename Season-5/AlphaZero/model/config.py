@@ -75,6 +75,10 @@ class TrainingConfig:
     # (uniform predictions) and drops as the head learns. Weight 1.5
     # follows KataGo's published range.
     ownership_loss_weight: float = 0.0
+    # Score-loss weight (KataGo-style score head). Default 0.0
+    # preserves the 9x9 recipe; 13x13 preset turns it on. The score
+    # head predicts territory margin and value is derived from it.
+    score_loss_weight: float = 0.0
 
     # Checkpointing
     checkpoint_interval: int = 10  # iterations between checkpoints
@@ -177,12 +181,14 @@ CONFIGS = {
             # ≈ 40 % of a healthy 170-move game; after move 60 the
             # net is free to pass if territory is genuinely settled.
             pass_min_move=60,
-            # Standard loss: policy + value + ownership auxiliary.
-            # Reverted from run4's vlw=0 / derived-value experiment.
-            # Value head is now a standard MLP (same as 9x9 / AlphaGo
-            # Zero). Ownership head is a KataGo-style auxiliary that
-            # regularizes the trunk with dense per-cell supervision.
-            value_loss_weight=1.0,
+            # Value loss weight 0: value is derived from score head,
+            # not trained directly. Score loss + ownership loss train
+            # the trunk; value reads off the score prediction.
+            value_loss_weight=0.0,
+            # Score loss weight: MSE on raw territory margin (±50
+            # typical on 13x13). Cold MSE ~130. Weight 0.01 →
+            # contribution ~1.3 ≈ 15% of total loss.
+            score_loss_weight=0.01,
             # 50 steps × batch 1024 = 51,200 samples/iter ≈ 29%
             # coverage of the ~175k positions from 1024 games/iter.
             train_steps_per_iter=50,

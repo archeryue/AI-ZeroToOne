@@ -271,9 +271,9 @@ class ParallelSelfPlay:
                         # ownership is discarded.
                         if self.use_cuda:
                             with torch.amp.autocast("cuda"):
-                                logits, values, _own = self.infer_net(obs_tensor)
+                                logits, values, _own, _score = self.infer_net(obs_tensor)
                         else:
-                            logits, values, _own = self.infer_net(obs_tensor)
+                            logits, values, _own, _score = self.infer_net(obs_tensor)
                         policies = torch.softmax(logits, dim=-1)
 
                     if self.use_cuda:

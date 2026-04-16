@@ -1,14 +1,17 @@
 """Network training loop for AlphaZero.
 
-Loss = policy_loss + value_loss_weight * value_loss
+Loss = policy_loss + score_loss_weight * score_loss
                   + ownership_loss_weight * ownership_loss + L2_reg
   policy_loss    = -pi . log(p)                   (cross-entropy)
-  value_loss     = (z - v)^2                      (MSE with game outcome)
-  ownership_loss = mean BCE-with-logits per cell  (KataGo-style aux target)
-  L2_reg         = c * ||theta||^2                (via optimizer weight_decay)
+  score_loss     = (score_target - score_pred)^2   (MSE with territory margin)
+  ownership_loss = mean BCE-with-logits per cell   (KataGo-style aux target)
+  L2_reg         = c * ||theta||^2                 (via optimizer weight_decay)
 
-Ownership added in run4 (PHASE_TWO_TRAINING.md). Default weight 0.0
-preserves the 9x9 recipe; the 13x13 preset turns it on.
+No direct value loss — value is derived from score via
+  value = tanh(scale * score_pred + bias)
+The derived value is used by MCTS but not directly supervised.
+Score supervision is denser than binary ±1: the target is the actual
+territory margin from current player's perspective.
 """
 
 import math
@@ -50,18 +53,7 @@ class Trainer:
     def train_step(self, buffer: ReplayBuffer,
                    anchor: ReplayBuffer = None,
                    anchor_frac: float = 0.0) -> dict:
-        """One gradient step. Returns loss components.
-
-        Skipped (no weight update) if the loss is non-finite — we hit a
-        NaN at iter 13 of the first run because a single gradient spike
-        with no clipping sent the weights to inf. The guard here plus
-        `clip_grad_norm_` below prevents a recurrence.
-
-        If `anchor` is given, `anchor_frac` of each batch is drawn from
-        it instead of the main buffer. This is a regularizer against
-        BatchNorm specializing to the current narrow self-play
-        distribution (see iter 4→19 regression handover).
-        """
+        """One gradient step. Returns loss components."""
         self.net.train()
 
         use_anchor = (
@@ -78,34 +70,40 @@ class Trainer:
         else:
             obs_np, policy_np, value_np, ownership_np = buffer.sample(
                 self.cfg.batch_size)
-        # Buffer stores obs as uint8 (Phase 2 memory optimization).
-        # Cast to float AFTER the H2D copy so PCIe sees 1 byte/cell
-        # instead of 4 — CUDA fuses the dtype promotion into the load.
+
         obs = torch.from_numpy(obs_np).to(self.device).float()
         target_policy = torch.from_numpy(policy_np).to(self.device)
-        target_value = torch.from_numpy(value_np).to(self.device)
-        # Ownership: int8 in {-1, 0, 1}; map to BCE target in [0, 1].
-        # Dame cells (0) get target 0.5, where BCE is minimized at
-        # logit=0 (uncertain). KataGo uses 3-class softmax instead;
-        # 2-class BCE-with-logits is simpler and works at this scale.
+        # Ownership: int8 in {-1, 0, 1} from current player's perspective.
         target_ownership = torch.from_numpy(ownership_np).to(
             self.device).float()
+        # BCE target in [0, 1]. Dame cells (0) → 0.5.
         target_ownership_01 = (target_ownership + 1.0) / 2.0
+        # Score target: sum of ownership per cell = territory margin
+        # from current player's perspective. Raw range roughly ±50
+        # on 13x13 (typical ±15-25). score_loss_weight is set small
+        # (0.01) to balance against policy loss (~5).
+        target_score = target_ownership.sum(dim=(1, 2))  # (B,)
 
         with torch.amp.autocast("cuda", enabled=self.device.type == "cuda"):
-            logits, value, ownership_logits = self.net(obs)
+            logits, value, ownership_logits, score_pred = self.net(obs)
 
             # Policy loss: cross-entropy with MCTS visit distribution
             log_probs = F.log_softmax(logits, dim=-1)
             policy_loss = -(target_policy * log_probs).sum(dim=-1).mean()
 
-            # Value loss: MSE
+            # Score loss: MSE between predicted and actual score margin.
+            score_w = getattr(self.cfg, "score_loss_weight", 0.0)
+            if score_w > 0.0:
+                score_loss = F.mse_loss(score_pred, target_score)
+            else:
+                score_loss = torch.zeros((), device=self.device)
+
+            # Value loss: MSE with game outcome (reported for monitoring;
+            # value is derived from score, typically vlw=0).
+            target_value = torch.from_numpy(value_np).to(self.device)
             value_loss = F.mse_loss(value, target_value)
 
-            # Ownership loss: per-cell BCE-with-logits. Reduces to
-            # (B*N*N,) → mean. Provides ~169× the supervision density
-            # of the scalar value loss alone, which is the whole point
-            # of adding the head — see PHASE_TWO_TRAINING.md run4.
+            # Ownership loss: per-cell BCE-with-logits.
             own_w = getattr(self.cfg, "ownership_loss_weight", 0.0)
             if own_w > 0.0:
                 ownership_loss = F.binary_cross_entropy_with_logits(
@@ -113,35 +111,25 @@ class Trainer:
             else:
                 ownership_loss = torch.zeros((), device=self.device)
 
-            # Weighted total. policy_loss magnitude (~5, cross-entropy
-            # over 170 actions) dominates value_loss magnitude (~0.9,
-            # MSE over ±1) at equal weights, leaving the value head
-            # under-trained — Phase 2 13x13 raises value_loss_weight
-            # to 2.0 to partially compensate. The ownership head is
-            # a much larger fix: dense per-cell labels eliminate the
-            # sparse-supervision regime entirely.
             loss = (policy_loss
                     + self.cfg.value_loss_weight * value_loss
+                    + score_w * score_loss
                     + own_w * ownership_loss)
 
-        # NaN / Inf guard — skip the step entirely rather than poisoning
-        # the weights. Returns the current (unchanged) values so the
-        # epoch average still accumulates something sensible.
+        # NaN / Inf guard
         if not torch.isfinite(loss):
             self._nan_skips += 1
             return {
                 "loss": float("nan"),
                 "policy_loss": float("nan"),
                 "value_loss": float("nan"),
+                "score_loss": float("nan"),
                 "ownership_loss": float("nan"),
                 "skipped": True,
             }
 
         self.optimizer.zero_grad()
         loss.backward()
-        # Gradient clipping — cap the L2 norm of all parameter grads
-        # at 5.0. Without this, occasional SGD spikes can send weights
-        # to ∞ in one step (learned the hard way at iter 13).
         torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=5.0)
         self.optimizer.step()
 
@@ -151,6 +139,7 @@ class Trainer:
             "loss": loss.item(),
             "policy_loss": policy_loss.item(),
             "value_loss": value_loss.item(),
+            "score_loss": float(score_loss.item()),
             "ownership_loss": float(ownership_loss.item()),
             "skipped": False,
         }
@@ -166,6 +155,7 @@ class Trainer:
         total_loss = 0.0
         total_policy = 0.0
         total_value = 0.0
+        total_score = 0.0
         total_ownership = 0.0
         steps = self.cfg.train_steps_per_iter
         applied = 0
@@ -180,6 +170,7 @@ class Trainer:
             total_loss += stats["loss"]
             total_policy += stats["policy_loss"]
             total_value += stats["value_loss"]
+            total_score += stats["score_loss"]
             total_ownership += stats["ownership_loss"]
             applied += 1
 
@@ -188,6 +179,7 @@ class Trainer:
             "loss": total_loss / denom,
             "policy_loss": total_policy / denom,
             "value_loss": total_value / denom,
+            "score_loss": total_score / denom,
             "ownership_loss": total_ownership / denom,
             "lr": lr,
             "total_steps": self.total_steps,

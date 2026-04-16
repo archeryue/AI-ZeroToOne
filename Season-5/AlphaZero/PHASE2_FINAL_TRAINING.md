@@ -286,4 +286,19 @@ with:
 
 | iter | total | pi | v | own | self-play time | avg moves | games/s | eval vs random | note |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| | | | | | | | | | |
+| 0 | 6.9721 | 5.1782 | 0.8834 | 0.6070 | 1665.3s (27.8m) | 161 | 0.6 | **43.3%** | v_loss=0.88 better than old config's 0.90. Eval 43% vs old 32% — bigger batch helps. |
+| 1 | 7.0035 | 5.1264 | 1.0128 | 0.5762 | 1124.3s (18.7m) | 110 | 0.9 | **0.0%** | v_loss crossed cold floor (1.01 > 1.0). Eval collapsed 43→0%. Bigger batch did NOT prevent value head overfit. Same pattern as all prior runs. |
+
+#### Score head architecture (replacing value MLP entirely)
+
+Value MLP (44k params) memorized at every config. Replaced with:
+- Score head: Conv1x1+LN+FC(169→32→1) = 5.9k params, predicts
+  normalized territory margin
+- Value derived: `tanh(5.0 * score_pred + bias)` — 2 learnable scalars
+- Loss: `policy + 1.0*score_MSE + 1.5*ownership_BCE` (no direct value loss)
+- Score target: `sum(ownership) / N²` (normalized to [-1,1])
+- Seed 200
+
+| iter | total | pi | v | score | own | self-play time | avg moves | games/s | eval vs random | note |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 0 | 6.0595 | 5.1292 | 1.0450 | 0.0193 | 0.6073 | 1496.9s (25.0m) | 150 | 0.7 | (pending) | Score head arch. v=1.05 at cold floor (can't memorize). |

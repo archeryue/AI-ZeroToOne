@@ -1,22 +1,28 @@
-"""AlphaZero ResNet (policy + value + ownership auxiliary).
+"""AlphaZero ResNet (policy + score + ownership), KataGo-style.
 
-Standard AlphaGo Zero / KataGo architecture:
+Architecture:
 
-  Input → Conv3x3+LN+ReLU → N×ResBlock → PolicyHead + ValueHead + OwnershipHead
+  Input → Conv3x3+LN+ReLU → N×ResBlock → PolicyHead + ScoreHead + OwnershipHead
 
 Policy head:    Conv1x1(ch→2) + LN + ReLU + FC → softmax over actions
-Value head:     Conv1x1(ch→1) + LN + ReLU + FC(N*N→256) + ReLU + FC(256→1) + tanh
+Score head:     Conv1x1(ch→1) + LN + ReLU + FC(N*N→32) + ReLU + FC(32→1)
+                Predicts final score margin from current player's perspective.
+                ~5.5k params (vs 44k for the old value MLP).
 Ownership head: Conv1x1(ch→1) → (N, N) logits  (BCE-with-logits in trainer)
 
-Uses LayerNorm everywhere instead of BatchNorm. BatchNorm's running
-statistics caused recurring train/eval distribution drift throughout
-Phase 1 (Problem 3: BN specialization) and Phase 2 (strength drift
-candidate). LayerNorm normalizes per-sample with no running stats,
-so train and eval behavior are identical.
+Value is DERIVED from score: value = tanh(score_pred * scale + bias)
+where scale and bias are two learnable scalars. This means:
+- The value head has ~5.5k + 2 = ~5.5k params total
+- It cannot memorize 165k noisy ±1 labels (the failure mode that
+  killed every prior 13x13 run with the 44k-param value MLP)
+- Score supervision is denser than binary win/loss: the target is
+  the actual territory margin, not ±1
 
-Ownership head is a KataGo-style auxiliary that provides dense per-cell
-supervision to regularize the trunk. Default ownership_loss_weight=0.0
-preserves the 9x9 recipe; 13x13 preset turns it on.
+The score target is computed from ownership labels already in the
+replay buffer: score = sum(ownership_per_cell) from the current
+player's perspective. No C++ or buffer changes needed.
+
+Uses LayerNorm everywhere instead of BatchNorm.
 """
 
 import torch
@@ -62,12 +68,23 @@ class AlphaZeroNet(nn.Module):
         self.policy_ln = nn.LayerNorm([2, N, N])
         self.policy_fc = nn.Linear(2 * N * N, config.actions)
 
-        # Value head: Conv1x1(ch→1) + LN + ReLU + FC(N*N→256) + ReLU + FC(256→1) + tanh
-        # Standard AlphaGo Zero architecture.
-        self.value_conv = nn.Conv2d(ch, 1, 1, bias=False)
-        self.value_ln = nn.LayerNorm([1, N, N])
-        self.value_fc1 = nn.Linear(N * N, 256)
-        self.value_fc2 = nn.Linear(256, 1)
+        # Score head: Conv1x1(ch→1) + LN + ReLU + FC(N*N→32) + ReLU + FC(32→1)
+        # Predicts final score margin (territory difference) from
+        # current player's perspective. Much smaller than the old
+        # value MLP (5.5k vs 44k params) — can't memorize cold data.
+        self.score_conv = nn.Conv2d(ch, 1, 1, bias=False)
+        self.score_ln = nn.LayerNorm([1, N, N])
+        self.score_fc1 = nn.Linear(N * N, 32)
+        self.score_fc2 = nn.Linear(32, 1)
+
+        # Value derived from score prediction. Two learnable scalars
+        # that map raw score margin → win probability:
+        #   value = tanh(value_scale * score_pred + value_bias)
+        # Score is raw territory margin (range ±50 typical on 13x13).
+        # Scale init 0.05: tanh(0.05 * ±20) ≈ ±0.76 (a 20-point
+        # lead). Bias init 0: no prior.
+        self.value_scale = nn.Parameter(torch.tensor(0.05))
+        self.value_bias = nn.Parameter(torch.tensor(0.0))
 
         # Ownership head: Conv1x1(ch→1) → (B, 1, N, N) logits.
         # KataGo-style auxiliary — dense per-cell supervision regularizes
@@ -75,7 +92,7 @@ class AlphaZeroNet(nn.Module):
         # straight to binary_cross_entropy_with_logits in the trainer.
         self.ownership_conv = nn.Conv2d(ch, 1, 1, bias=True)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # Input block
         out = F.relu(self.input_ln(self.input_conv(x)))
 
@@ -88,21 +105,24 @@ class AlphaZeroNet(nn.Module):
         p = self.policy_fc(p)
         policy_logits = p
 
-        # Value head — standard MLP
-        v = F.relu(self.value_ln(self.value_conv(out)))
-        v = v.flatten(1)
-        v = F.relu(self.value_fc1(v))
-        v = torch.tanh(self.value_fc2(v)).squeeze(-1)
+        # Score head — predicts score margin
+        s = F.relu(self.score_ln(self.score_conv(out)))
+        s = s.flatten(1)
+        s = F.relu(self.score_fc1(s))
+        score = self.score_fc2(s).squeeze(-1)  # (B,)
+
+        # Derived value from score
+        value = torch.tanh(self.value_scale * score + self.value_bias)
 
         # Ownership head — per-cell logit, (B, N, N)
         own_logits = self.ownership_conv(out).squeeze(1)
 
-        return policy_logits, v, own_logits
+        return policy_logits, value, own_logits, score
 
     def predict(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Run inference for MCTS. Returns (policy_probs, value)."""
         with torch.no_grad():
-            logits, value, _own = self(obs)
+            logits, value, _own, _score = self(obs)
             policy = F.softmax(logits, dim=-1)
         return policy, value
 
