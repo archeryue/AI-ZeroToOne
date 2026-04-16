@@ -269,4 +269,21 @@ _(Append new iters as they land.)_
 
 | iter | total | pi | v | own | self-play time | avg moves | games/s | eval vs random | note |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 0 | 6.9896 | 5.1509 | 0.9005 | 0.6255 | 3207.8s (53.5m) | 161 | 0.6 | **32.0%** | First iter; v_loss=0.90 near cold floor. own_loss=0.63 below 0.693 entropy — ownership learning. |
+| 1 | 6.8626 | 5.0591 | 0.9787 | 0.5499 | 2165.7s (36.1m) | 114 | 0.9 | **14.0%** | v_loss rose +0.08. Eval dropped 32→14%. |
+| 2 | 6.6453 | 4.9548 | 0.9524 | 0.4920 | 4590.8s (76.5m) | 233 | 0.4 | **6.0%** | v_loss reversed 0.98→0.95 but eval dropped further to 6%. Games 233 avg (too conservative). |
+
+#### Fresh restart: batch=1024, lr=0.00125, games_per_iter=1024
+
+Eval degraded 32→14→6% despite improving losses. The iter 0
+checkpoint (32% vs random) was barely above the untrained baseline
+(~20-25%), so not worth preserving. Full restart from random weights
+with:
+- `batch_size` 256→1024 (4× more stable value gradients)
+- `lr_init` 0.005→0.00125 (linear scaling rule for 4× batch)
+- `games_per_iter` 2048→1024 (faster iters, ~25-40 min each)
+- Seed 100
+
+| iter | total | pi | v | own | self-play time | avg moves | games/s | eval vs random | note |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | | | | | | | | | | |

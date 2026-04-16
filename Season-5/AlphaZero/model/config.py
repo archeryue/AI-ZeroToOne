@@ -147,11 +147,14 @@ CONFIGS = {
             # the training targets instead of collapsing to argmax.
             temperature_moves=40,
             temperature_low=0.25,
-            # Halved from the 0.01 default to match the 9x9 run 2
-            # fix for BN drift. Run 1 used 0.01 and exhibited the
-            # iter-4→19 regression; run 2 at 0.005 was stable. Cheap
-            # insurance on a bigger net (15b vs 10b) and a bigger game.
-            lr_init=0.005,
+            # Batch 1024: 4× bigger than default 256 for more stable
+            # value head gradients on noisy ±1 labels. Applied at iter 3.
+            batch_size=1024,
+            # lr=0.00125: batch 256→1024 (4×) with linear scaling rule
+            # (0.005/4). Applied at iter 3 after v_loss reversed at
+            # iter 2. Bigger batch stabilizes value head gradients on
+            # noisy ±1 labels.
+            lr_init=0.00125,
             # Raised 40 → 80 and threshold -0.90 → -0.95 after run4b
             # iter 2 resumed and produced ~50 avg moves/game from an
             # iter-1-trained checkpoint (vs iter 0/1 at 173/182). The
@@ -180,7 +183,9 @@ CONFIGS = {
             # Zero). Ownership head is a KataGo-style auxiliary that
             # regularizes the trunk with dense per-cell supervision.
             value_loss_weight=1.0,
-            train_steps_per_iter=100,
+            # 50 steps × batch 1024 = 51,200 samples/iter ≈ 29%
+            # coverage of the ~175k positions from 1024 games/iter.
+            train_steps_per_iter=50,
             # Ownership weight 1.5 — KataGo-range auxiliary supervision.
             # Dense per-cell labels regularize the trunk without
             # replacing the value head.
