@@ -1,0 +1,89 @@
+## 目标
+- 以有限的预算，尝试 AlphaZero 训练
+## Workload 分析
+- Pure Self-play, without human knowledge
+- **Per Iteration**:
+	- Self-play: 2048 games, 120-200 moves/game, 400 sims/move
+		- Per Sim: 1 Policy Network + 1 Value Network
+		- Batch: 256 * 8 -> 2048
+	- Training: SGD * 2 (Forward + Backward)
+		- Batch: 512 -> 1024/2048
+		- Steps: 50/100
+	- 99%+ Self-play & 1% Training
+- Model: 5M Parameters
+## 架构设计
+- 计算
+	- 256 局对局并行（256 threads），8 games / thread
+	- 8 Virtual Nodes：256 * 8 = 2048 局面 batch 送 GPU
+	- CPU 耗时长，Engine & MCTS 改为 C++
+	- GPU 耗时长，混合精度，torch.compile
+- 内存：13 * 13 need at least 45GB 
+	- MCTS Tree
+	- Replay_buffer，存储 1M Samples
+	- Torch.compile
+	- others
+-  通信：Pinned Memory，且数据量小，基本忽略
+## GPU 选择
+- 现存需求量小，性价比最高的选择：RTX 4090，with 8vGPU，with 36GB Mem
+- 5090 vs 4090，快 30%，但贵 50% （$0.6/hour vs $0.9/hour）
+- 复盘：应该租 2块 4090，快速验证、快速迭代
+## 训练计划
+- 基本放弃 19 * 19
+- Phase 1: 9 * 9，预算 $10
+- Phase 2: 13 * 13，预算 $20
+- AI-ZTO 总预算 $200，目前花费 $25，Nano-LLM 预留 $140-$150
+## Phase 1 复盘
+- **遇到的问题**
+	- Speed，远低于预期
+		- CPU thread 控制
+		- GPU 推理速度慢 7-8 倍
+		- 通信代码 Bug
+	- Crash，segment fault，C++ 代码 Bug
+	- Regression
+		- Resign 策略
+		- Replay_buffer 未持久化
+	- OOM：优化内存，释放废弃 Sub-tree 等
+	- Regression（memorization）
+		- Replay_buffer 增强的 bug
+		- BatchNorm Drift
+- **Learning**
+	- GPU 计算速度比理论慢，7分钟一次 Iteration，应该双卡
+	- 涉及 Search Tree 和 Replay_buffer 的训练，内存优化是个大问题
+	- Replay_buffer 的内容需要深入进去分析，不要想当然，训练数据偏了不可能训的好
+## Phase 2 复盘
+- **遇到的问题**
+	- 内存再次优化
+		- Replay_buffer uint8 改造
+		- MCTS Tree 的空间限制
+	- 诡异的偶发 OOM
+		- 无解，拆小 iteration，快速恢复
+	- Regression
+		- Early-resign
+			- Resign 阈值收紧
+			- Resign 步数限制
+			- 探索权重增大，噪音增大
+			- Pass 步数限制
+		- Value-head 震荡
+			- 增加 batch，降低 lr
+			- MSE -> WDL + BCE
+			- 增加 Ownership Head
+			- 增加 Score Head
+			- 废除 Value Head 独立性
+			- Policy / Score / Ownership Loss 权重配比
+		- 仍然 regression
+			- BatchNorm -> LayerNorm
+			- 各种快速调整和测试
+				- 概率性 Fast Sims (100/400)
+				- 更全面的 Correctness Test
+				- Gradient / Weight Analysis
+				- 严格 ablation
+- **Learning**
+	- 最好是有个本地 GPU 测试环节，租的 GPU 遇到不顺容易烦躁
+	- Correctness Test 要尽可能做到非常充分，每次调整策略/模型后要维护好
+	- 训练过程中，Evaluation、Gradient/Weight Analysis 要做扎实
+	- 尽量能做到快速验证，炼丹本质是个超参数搜索过程，越快有 feedback 越好
+	- 每次调整丹方要严格 abation，不要想当然
+	- 还是应该多卡训练
+## 总结与展望
+- 13 * 13 后续还是得抽时间训练完
+- 19 * 19 未来打算尝试下 KataGo 的玩法，做成计算任务包发布到网上，大家没事都可以贡献下
