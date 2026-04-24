@@ -47,7 +47,7 @@
  - RL in Action (Chess AI)
  - RL in Action (AlphaGo)
 
-### Season 6: Build LLM
+### Season 6: Build LLM [Videos](https://space.bilibili.com/20942052/lists/7969767)
 
 #### Part A: LLM System Concepts
 
