@@ -12,6 +12,8 @@
 
 ## Part B: Rebuilding NanoChat from Scratch
 
+> **Companion repo:** [`ArcherChat`](https://github.com/archeryue/ArcherChat) — the from-scratch reimplementation built across this part.
+
 * Codebase Walkthrough
 * Core Module Rewrites (I): Muon Optimizer & Compute-Optimal Scaling
 * Core Module Rewrites (II): Sliding Window Attention, Dataloader, KV Cache Engine
